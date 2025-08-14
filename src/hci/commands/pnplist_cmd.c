@@ -57,8 +57,8 @@ static struct command_descriptor pnplist_cmd =
 static int pnplist_show_device ( struct net_device *netdev ) {
 	struct device *dev = netdev->dev;
 	struct pci_device *pci;
-	uint16_t subsys_vendor, subsys_device;
-	uint8_t revision;
+	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
+	uint8_t revision = 0x00;
 	int rc;
 
 	/* Check if this is a PCI device */
@@ -70,33 +70,31 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	/* Get PCI device */
 	pci = container_of ( dev, struct pci_device, dev );
 
-	/* Read subsystem vendor ID */
-	if ( ( rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID,
-					   &subsys_vendor ) ) != 0 ) {
-		printf ( "Error reading subsystem vendor ID for %s: %s\n",
-			 netdev->name, strerror ( rc ) );
-		return rc;
+	/* Try to read subsystem vendor ID - ignore errors */
+	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
+	if ( rc != 0 ) {
+		/* Failed to read subsystem vendor ID, use 0x0000 as default */
+		subsys_vendor = 0x0000;
 	}
 
-	/* Read subsystem device ID */
-	if ( ( rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID,
-					   &subsys_device ) ) != 0 ) {
-		printf ( "Error reading subsystem device ID for %s: %s\n",
-			 netdev->name, strerror ( rc ) );
-		return rc;
+	/* Try to read subsystem device ID - ignore errors */
+	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
+	if ( rc != 0 ) {
+		/* Failed to read subsystem device ID, use 0x0000 as default */
+		subsys_device = 0x0000;
 	}
 
-	/* Read revision */
-	if ( ( rc = pci_read_config_byte ( pci, PCI_REVISION,
-					   &revision ) ) != 0 ) {
-		printf ( "Error reading revision for %s: %s\n",
-			 netdev->name, strerror ( rc ) );
-		return rc;
+	/* Try to read revision - ignore errors */
+	rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
+	if ( rc != 0 ) {
+		/* Failed to read revision, use 0x00 as default */
+		revision = 0x00;
 	}
 
 	/* Display PNP device path */
-	if ( ( subsys_vendor == 0x0000 ) && ( subsys_device == 0x0000 ) ) {
-		/* No subsystem ID - use vendor and device ID as fallback */
+	if ( ( subsys_vendor == 0x0000 ) || ( subsys_device == 0x0000 ) ||
+	     ( subsys_vendor == 0xFFFF ) || ( subsys_device == 0xFFFF ) ) {
+		/* No valid subsystem ID - use vendor and device ID as fallback */
 		printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
 			 pci->vendor, pci->device, pci->device, pci->vendor,
 			 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
