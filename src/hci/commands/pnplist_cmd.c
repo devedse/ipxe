@@ -50,6 +50,22 @@ static struct command_descriptor pnplist_cmd =
 	COMMAND_DESC ( struct pnplist_options, pnplist_opts, 0, 0, "" );
 
 /**
+ * Count the number of network devices
+ *
+ * @ret count		Number of network devices
+ */
+static int count_netdevs ( void ) {
+	struct net_device *netdev;
+	int count = 0;
+	
+	for_each_netdev ( netdev ) {
+		count++;
+	}
+	
+	return count;
+}
+
+/**
  * Find the actual PCI device for a network device, handling SNP abstraction
  *
  * @v netdev		Network device
@@ -62,6 +78,10 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 	uint32_t busdevfn = 0;
 	uint32_t class;
 	int rc;
+	int netdev_count;
+	int current_network_device = 0;
+	int target_netdev_index = 0;
+	struct net_device *temp_netdev;
 
 	/* First, try direct PCI device access */
 	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
@@ -81,6 +101,20 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 		       dev->desc.bus_type);
 	}
 
+	/* Find the index of this netdev in the list */
+	for_each_netdev ( temp_netdev ) {
+		if ( temp_netdev == netdev ) {
+			break;
+		}
+		target_netdev_index++;
+	}
+	
+	/* Count total network devices */
+	netdev_count = count_netdevs();
+	
+	printf("DEBUG: Target netdev '%s' is at index %d of %d total netdevs\n", 
+	       netdev->name, target_netdev_index, netdev_count);
+
 	/* For SNP devices or abstracted devices, search the PCI bus for network controllers */
 	printf("DEBUG: Searching PCI bus for network controllers...\n");
 	while ( ( rc = pci_find_next ( &temp_pci, &busdevfn ) ) == 0 ) {
@@ -89,26 +123,32 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 		if ( rc == 0 ) {
 			class >>= 8; /* Remove revision byte */
 			if ( ( class >> 8 ) == PCI_CLASS_NETWORK ) {
-				printf("DEBUG: Found network PCI device: %02x:%02x.%x vendor=0x%04x device=0x%04x class=0x%06x\n",
-				       PCI_BUS(temp_pci.busdevfn), PCI_SLOT(temp_pci.busdevfn), 
+				printf("DEBUG: Found network PCI device %d: %02x:%02x.%x vendor=0x%04x device=0x%04x class=0x%06x\n",
+				       current_network_device, PCI_BUS(temp_pci.busdevfn), PCI_SLOT(temp_pci.busdevfn), 
 				       PCI_FUNC(temp_pci.busdevfn), temp_pci.vendor, temp_pci.device, class);
 				
-				/* For now, return the first network controller we find.
-				 * In a more sophisticated implementation, we could match by MAC address
-				 * or other criteria to find the exact device for this netdev. */
-				
-				/* Allocate a new PCI device structure to return */
-				pci = malloc ( sizeof ( *pci ) );
-				if ( pci ) {
-					memcpy ( pci, &temp_pci, sizeof ( *pci ) );
-					return pci;
+				/* If there's only one network device and one PCI network controller, use it */
+				/* Or match by index if there are multiple */
+				if ( ( netdev_count == 1 && current_network_device == 0 ) ||
+				     ( current_network_device == target_netdev_index ) ) {
+					printf("DEBUG: Matched netdev '%s' (index %d) to PCI device %d\n", 
+					       netdev->name, target_netdev_index, current_network_device);
+					
+					/* Allocate a new PCI device structure to return */
+					pci = malloc ( sizeof ( *pci ) );
+					if ( pci ) {
+						memcpy ( pci, &temp_pci, sizeof ( *pci ) );
+						return pci;
+					}
 				}
+				current_network_device++;
 			}
 		}
 		busdevfn++;
 	}
 
-	printf("DEBUG: No network PCI device found on bus\n");
+	printf("DEBUG: No matching network PCI device found for netdev '%s' (index %d)\n", 
+	       netdev->name, target_netdev_index);
 	return NULL;
 }
 
