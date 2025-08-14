@@ -272,6 +272,9 @@ REQUIRE_OBJECT ( nslookup_cmd );
 #ifdef PCI_CMD
 REQUIRE_OBJECT ( pci_cmd );
 #endif
+#ifdef PNPLIST_CMD
+REQUIRE_OBJECT ( pnplist_cmd );
+#endif
 #ifdef PARAM_CMD
 REQUIRE_OBJECT ( param_cmd );
 #endif
