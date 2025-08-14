@@ -30,6 +30,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pci.h>
 #include <ipxe/command.h>
 #include <ipxe/parseopt.h>
+#include <ipxe/malloc.h>
 
 /** @file
  *
@@ -48,206 +49,158 @@ static struct command_descriptor pnplist_cmd =
 	COMMAND_DESC ( struct pnplist_options, pnplist_opts, 0, 0, "" );
 
 /**
- * Count the number of network devices
+ * Detect if device info appears to be abstracted by SNP or virtualization
  *
- * @ret count		Number of network devices
- */
-static int count_netdevs ( void ) {
-	struct net_device *netdev;
-	int count = 0;
-	
-	for_each_netdev ( netdev ) {
-		count++;
-	}
-	
-	return count;
-}
-
-/**
- * Detect if a PCI device has abstracted/virtualized vendor/device IDs
- * Common in SNP (Simple Network Protocol) and other virtualization environments
- * 
  * @v vendor		Vendor ID to check
  * @v device		Device ID to check  
  * @ret abstracted	True if this appears to be abstracted device info
  */
-static int is_abstracted_device ( uint16_t vendor, uint16_t device ) {
+static int is_snp_abstracted ( uint16_t vendor, uint16_t device ) {
 	/* SNP commonly uses these abstracted IDs */
-	if ( vendor == 0x0102 && device == 0x000c ) {
-		return 1;
-	}
-	
-	/* Other common virtualization abstraction patterns */
-	if ( vendor == 0x1414 && device == 0x008e ) { /* Microsoft Hyper-V */
-		return 1;
-	}
-	
-	if ( vendor == 0x1af4 && device == 0x1041 ) { /* VirtIO network device (modern) */
-		return 1;
-	}
-	
-	/* Generic patterns that suggest abstraction */
-	if ( vendor == 0x0001 || vendor == 0x0002 || vendor == 0x0100 ) {
-		return 1;
-	}
-	
-	return 0;
+	return ( vendor == 0x0102 && device == 0x000c );
 }
 
 /**
- * Find the actual PCI device for a network device, handling SNP abstraction
+ * Scan PCI bus for network controllers and return the one at specified index
  *
- * In SNP (UEFI Simple Network Protocol) environments, network devices often
- * present abstracted vendor/device IDs (like 0x0102:0x000c) instead of the
- * real underlying hardware IDs. This function detects such abstraction and
- * performs a comprehensive PCI bus scan to find the actual network controller.
- *
- * @v netdev		Network device
- * @ret pci		PCI device, or NULL if not found
+ * @v target_index	Index of network controller to return (0-based)
+ * @ret pci		PCI device structure, or NULL if not found
  */
-static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) {
-	struct device *dev = netdev->dev;
-	struct pci_device *pci;
+static struct pci_device * scan_pci_network_controllers ( int target_index ) {
 	struct pci_device temp_pci;
+	struct pci_device *result_pci;
 	uint32_t busdevfn = 0;
 	uint32_t class;
 	uint32_t vendor_device;
+	int current_index = 0;
 	int rc;
-	int netdev_count;
-	int current_network_device = 0;
-	int target_netdev_index = 0;
-	struct net_device *temp_netdev;
-	int requires_enhanced_scan = 0;
 
-	/* First, try direct PCI device access */
-	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
-		pci = container_of ( dev, struct pci_device, dev );
-		
-		printf ( "DEBUG: Direct PCI device vendor=0x%04x device=0x%04x\n", pci->vendor, pci->device );
-		
-		/* Check if we're getting abstracted device info (common in SNP) */
-		if ( is_abstracted_device( pci->vendor, pci->device ) ) {
-			printf ( "DEBUG: Detected abstracted device, will scan PCI bus\n" );
-			requires_enhanced_scan = 1;
-		} else {
-			/* Verify the stored values match config space */
-			rc = pci_read_config_dword ( pci, PCI_VENDOR_ID, &vendor_device );
-			if ( rc == 0 ) {
-				uint16_t config_vendor = vendor_device & 0xffff;
-				uint16_t config_device = vendor_device >> 16;
-				if ( config_vendor == pci->vendor && config_device == pci->device ) {
-					printf ( "DEBUG: Direct device verified, using it\n" );
-					return pci; /* Values match, device is valid */
-				}
-			}
-			printf ( "DEBUG: Direct device verification failed, will scan PCI bus\n" );
-			requires_enhanced_scan = 1;
-		}
-	} else {
-		printf ( "DEBUG: Non-PCI device, will scan PCI bus\n" );
-		requires_enhanced_scan = 1;
-	}
-
-	if ( ! requires_enhanced_scan ) {
-		return pci;
-	}
-
-	/* Find the index of this netdev in the list */
-	for_each_netdev ( temp_netdev ) {
-		if ( temp_netdev == netdev ) {
-			break;
-		}
-		target_netdev_index++;
-	}
-	
-	/* Count total network devices */
-	netdev_count = count_netdevs();
-	
-	printf ( "DEBUG: Enhanced scan - netdev_count=%d, target_index=%d\n", netdev_count, target_netdev_index );
-
-	/* Enhanced PCI bus scan for network controllers */
+	/* Scan all PCI devices looking for network controllers */
 	while ( ( rc = pci_find_next ( &temp_pci, &busdevfn ) ) == 0 ) {
 		/* Read class code to check if this is a network device */
 		rc = pci_read_config_dword ( &temp_pci, PCI_REVISION, &class );
 		if ( rc == 0 ) {
 			class >>= 8; /* Remove revision byte */
 			if ( ( class >> 8 ) == PCI_CLASS_NETWORK ) {
-				/* Read vendor/device from config space to ensure accuracy */
+				/* Read vendor/device from config space */
 				rc = pci_read_config_dword ( &temp_pci, PCI_VENDOR_ID, &vendor_device );
 				if ( rc == 0 ) {
 					temp_pci.vendor = vendor_device & 0xffff;
 					temp_pci.device = vendor_device >> 16;
-				}
-				
-				printf ( "DEBUG: Found network controller #%d: vendor=0x%04x device=0x%04x\n", 
-					 current_network_device, temp_pci.vendor, temp_pci.device );
-				
-				/* Device matching logic: for single device, use first found; for multiple, use index */
-				int should_use_device = 0;
-				
-				if ( netdev_count == 1 ) {
-					/* Single network device: use the first real network controller found */
-					should_use_device = 1;
-					printf ( "DEBUG: Single device - using this one\n" );
-				} else {
-					/* Multiple devices: match by index */
-					if ( current_network_device == target_netdev_index ) {
-						should_use_device = 1;
-						printf ( "DEBUG: Multiple devices - index match, using this one\n" );
+					
+					/* Skip invalid device IDs */
+					if ( temp_pci.vendor == 0x0000 || temp_pci.vendor == 0xffff ||
+					     temp_pci.device == 0x0000 || temp_pci.device == 0xffff ) {
+						busdevfn++;
+						continue;
 					}
-				}
-				
-				if ( should_use_device ) {
-					/* Allocate a new PCI device structure to return */
-					pci = malloc ( sizeof ( *pci ) );
-					if ( pci ) {
-						memcpy ( pci, &temp_pci, sizeof ( *pci ) );
-						printf ( "DEBUG: Returning enhanced scan result: vendor=0x%04x device=0x%04x\n", 
-							 pci->vendor, pci->device );
-						return pci;
+					
+					printf ( "DEBUG: Found network controller #%d: vendor=0x%04x device=0x%04x at %02x:%02x.%x\n", 
+						 current_index, temp_pci.vendor, temp_pci.device,
+						 PCI_BUS ( temp_pci.busdevfn ), PCI_SLOT ( temp_pci.busdevfn ), 
+						 PCI_FUNC ( temp_pci.busdevfn ) );
+					
+					if ( current_index == target_index ) {
+						/* Allocate and return this device */
+						result_pci = malloc ( sizeof ( *result_pci ) );
+						if ( result_pci ) {
+							memcpy ( result_pci, &temp_pci, sizeof ( *result_pci ) );
+							printf ( "DEBUG: Returning PCI device at index %d\n", target_index );
+							return result_pci;
+						}
 					}
+					current_index++;
 				}
-				current_network_device++;
 			}
 		}
 		busdevfn++;
 	}
-
+	
 	return NULL;
+}
+
+/**
+ * Get the actual PCI device information for a network device
+ *
+ * In SNP builds, network devices often present abstracted vendor/device IDs 
+ * instead of the real hardware. This function detects abstraction and uses
+ * PCI bus scanning to find the actual underlying network controller.
+ *
+ * @v netdev		Network device
+ * @v device_index	Index of this device in the network device list
+ * @ret pci		PCI device, or NULL if not found
+ * @ret need_free	Set to 1 if returned PCI device should be freed
+ */
+static struct pci_device * get_real_pci_device ( struct net_device *netdev, 
+						  int device_index, int *need_free ) {
+	struct device *dev = netdev->dev;
+	struct pci_device *pci = NULL;
+	
+	*need_free = 0;
+	
+	/* Try direct PCI device access first */
+	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
+		pci = container_of ( dev, struct pci_device, dev );
+		
+		printf ( "DEBUG: Direct PCI access - vendor=0x%04x device=0x%04x\n", 
+			 pci->vendor, pci->device );
+		
+		/* Check if we have abstracted device information */
+		if ( is_snp_abstracted ( pci->vendor, pci->device ) ) {
+			printf ( "DEBUG: Detected SNP abstraction, scanning PCI bus\n" );
+			
+			/* Use PCI bus scan to find real device */
+			pci = scan_pci_network_controllers ( device_index );
+			if ( pci ) {
+				*need_free = 1;
+				printf ( "DEBUG: Found real device via PCI scan: vendor=0x%04x device=0x%04x\n",
+					 pci->vendor, pci->device );
+				return pci;
+			} else {
+				printf ( "DEBUG: PCI scan failed, falling back to abstracted values\n" );
+				/* Fall back to original device */
+				pci = container_of ( dev, struct pci_device, dev );
+				*need_free = 0;
+			}
+		}
+		
+		return pci;
+	}
+	
+	/* Non-PCI device - try PCI bus scan */
+	printf ( "DEBUG: Non-PCI device, attempting PCI bus scan\n" );
+	pci = scan_pci_network_controllers ( device_index );
+	if ( pci ) {
+		*need_free = 1;
+		printf ( "DEBUG: Found device via PCI scan: vendor=0x%04x device=0x%04x\n",
+			 pci->vendor, pci->device );
+	}
+	
+	return pci;
 }
 
 /**
  * Display Windows-style PNP device path for a network device
  *
  * @v netdev		Network device
+ * @v device_index	Index of this network device
  * @ret rc		Return status code
  */
-static int pnplist_show_device ( struct net_device *netdev ) {
+static int pnplist_show_device ( struct net_device *netdev, int device_index ) {
 	struct pci_device *pci;
 	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
 	uint8_t revision = 0x00;
 	int rc;
-	int allocated_pci = 0;
+	int need_free = 0;
 
-	/* Find the actual PCI device */
-	pci = find_actual_pci_device ( netdev );
+	/* Get the real PCI device information */
+	pci = get_real_pci_device ( netdev, device_index, &need_free );
 	if ( ! pci ) {
-		return 0; /* Skip non-PCI devices */
+		return 0; /* Skip devices we can't identify */
 	}
 
-	/* Debug: Show what we found */
-	printf ( "DEBUG: Found PCI device vendor=0x%04x device=0x%04x for netdev\n", 
-		 pci->vendor, pci->device );
-
-	/* Check if we allocated this PCI structure (need to free it later) */
-	if ( netdev->dev->desc.bus_type != BUS_TYPE_PCI ) {
-		allocated_pci = 1;
-	} else {
-		struct pci_device *direct_pci = container_of ( netdev->dev, struct pci_device, dev );
-		if ( pci != direct_pci ) {
-			allocated_pci = 1;
-		}
-	}
+	printf ( "DEBUG: Using PCI device vendor=0x%04x device=0x%04x (need_free=%d)\n", 
+		 pci->vendor, pci->device, need_free );
 
 	/* Try to read subsystem vendor ID */
 	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
@@ -267,7 +220,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 		revision = 0x00;
 	}
 
-	/* Display PNP device path */
+	/* Display PNP device path in Windows format */
 	if ( ( subsys_vendor == 0x0000 ) || ( subsys_device == 0x0000 ) ||
 	     ( subsys_vendor == 0xFFFF ) || ( subsys_device == 0xFFFF ) ) {
 		/* No valid subsystem ID - use vendor and device ID as fallback */
@@ -284,7 +237,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	}
 
 	/* Free allocated PCI device structure if needed */
-	if ( allocated_pci ) {
+	if ( need_free ) {
 		free ( pci );
 	}
 
@@ -301,6 +254,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 static int pnplist_exec ( int argc, char **argv ) {
 	struct pnplist_options opts;
 	struct net_device *netdev;
+	int device_index = 0;
 	int rc;
 
 	/* Parse options */
@@ -309,8 +263,9 @@ static int pnplist_exec ( int argc, char **argv ) {
 
 	/* Iterate through all network devices */
 	for_each_netdev ( netdev ) {
-		if ( ( rc = pnplist_show_device ( netdev ) ) != 0 )
+		if ( ( rc = pnplist_show_device ( netdev, device_index ) ) != 0 )
 			return rc;
+		device_index++;
 	}
 
 	return 0;
