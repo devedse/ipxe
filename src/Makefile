@@ -217,6 +217,9 @@ install :
 ifneq ($(wildcard ../.git),)
 VERSIONS := $(shell git describe --tags --always --long --abbrev=1 --match "v*")
 VERSION_TUPLE	:= $(subst ., ,$(subst -, ,$(patsubst v%,%,$(VERSIONS))))
+# Check if we got a proper version tag or just a commit hash
+ifeq ($(findstring v,$(VERSIONS)),v)
+# We have a proper version tag
 VERSION_MAJOR	:= $(word 1,$(VERSION_TUPLE))
 VERSION_MINOR	:= $(word 2,$(VERSION_TUPLE))
 VERSION_PATCH	:= $(word 3,$(VERSION_TUPLE))
@@ -226,6 +229,14 @@ else
 EXTRAVERSION	:= +
 endif
 GITVERSION	= $(word 5,$(VERSION_TUPLE))
+else
+# We only have a commit hash, use default version
+VERSION_MAJOR	= 1
+VERSION_MINOR	= 21
+VERSION_PATCH	= 1
+EXTRAVERSION	= +
+GITVERSION	= $(VERSIONS)
+endif
 else
 VERSION_MAJOR	= 1
 VERSION_MINOR	= 0
