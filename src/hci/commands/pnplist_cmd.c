@@ -27,6 +27,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <string.h>
 #include <errno.h>
 #include <getopt.h>
+#include <stdlib.h>
 #include <ipxe/netdevice.h>
 #include <ipxe/pci.h>
 #include <ipxe/command.h>
@@ -49,27 +50,98 @@ static struct command_descriptor pnplist_cmd =
 	COMMAND_DESC ( struct pnplist_options, pnplist_opts, 0, 0, "" );
 
 /**
+ * Find the actual PCI device for a network device, handling SNP abstraction
+ *
+ * @v netdev		Network device
+ * @ret pci		PCI device, or NULL if not found
+ */
+static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) {
+	struct device *dev = netdev->dev;
+	struct pci_device *pci;
+	struct pci_device temp_pci;
+	uint32_t busdevfn = 0;
+	uint32_t class;
+	int rc;
+
+	/* First, try direct PCI device access */
+	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
+		pci = container_of ( dev, struct pci_device, dev );
+		
+		/* Verify this looks like a real network device */
+		if ( ( pci->vendor != 0x0102 ) || ( pci->device != 0x000c ) ) {
+			printf("DEBUG: Direct PCI device seems valid: %04x:%04x\n", 
+			       pci->vendor, pci->device);
+			return pci;
+		}
+		
+		printf("DEBUG: Direct PCI shows abstracted device %04x:%04x, searching for real device\n",
+		       pci->vendor, pci->device);
+	} else {
+		printf("DEBUG: Non-PCI device (%d), searching PCI bus for network controllers\n", 
+		       dev->desc.bus_type);
+	}
+
+	/* For SNP devices or abstracted devices, search the PCI bus for network controllers */
+	printf("DEBUG: Searching PCI bus for network controllers...\n");
+	while ( ( rc = pci_find_next ( &temp_pci, &busdevfn ) ) == 0 ) {
+		/* Read class code to check if this is a network device */
+		rc = pci_read_config_dword ( &temp_pci, PCI_REVISION, &class );
+		if ( rc == 0 ) {
+			class >>= 8; /* Remove revision byte */
+			if ( ( class >> 8 ) == PCI_CLASS_NETWORK ) {
+				printf("DEBUG: Found network PCI device: %02x:%02x.%x vendor=0x%04x device=0x%04x class=0x%06x\n",
+				       PCI_BUS(temp_pci.busdevfn), PCI_SLOT(temp_pci.busdevfn), 
+				       PCI_FUNC(temp_pci.busdevfn), temp_pci.vendor, temp_pci.device, class);
+				
+				/* For now, return the first network controller we find.
+				 * In a more sophisticated implementation, we could match by MAC address
+				 * or other criteria to find the exact device for this netdev. */
+				
+				/* Allocate a new PCI device structure to return */
+				pci = malloc ( sizeof ( *pci ) );
+				if ( pci ) {
+					memcpy ( pci, &temp_pci, sizeof ( *pci ) );
+					return pci;
+				}
+			}
+		}
+		busdevfn++;
+	}
+
+	printf("DEBUG: No network PCI device found on bus\n");
+	return NULL;
+}
+
+/**
  * Display Windows-style PNP device path for a network device
  *
  * @v netdev		Network device
  * @ret rc		Return status code
  */
 static int pnplist_show_device ( struct net_device *netdev ) {
-	struct device *dev = netdev->dev;
 	struct pci_device *pci;
 	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
 	uint8_t revision = 0x00;
 	uint32_t vendor_device = 0;
 	int rc;
+	int allocated_pci = 0;
 
-	/* Check if this is a PCI device */
-	if ( dev->desc.bus_type != BUS_TYPE_PCI ) {
-		/* Skip non-PCI devices */
+	/* Find the actual PCI device */
+	pci = find_actual_pci_device ( netdev );
+	if ( ! pci ) {
+		printf("DEBUG: No PCI device found for %s\n", netdev->name);
 		return 0;
 	}
 
-	/* Get PCI device */
-	pci = container_of ( dev, struct pci_device, dev );
+	/* Check if we allocated this PCI structure (need to free it later) */
+	if ( netdev->dev->desc.bus_type != BUS_TYPE_PCI ) {
+		allocated_pci = 1;
+	} else {
+		struct pci_device *direct_pci = container_of ( netdev->dev, struct pci_device, dev );
+		if ( pci != direct_pci ) {
+			allocated_pci = 1;
+		}
+	}
 
 	/* Debug: Read vendor/device directly from config space */
 	rc = pci_read_config_dword ( pci, PCI_VENDOR_ID, &vendor_device );
@@ -123,6 +195,11 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 			 pci->vendor, pci->device, subsys_device, subsys_vendor,
 			 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
 			 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+	}
+
+	/* Free allocated PCI device structure if needed */
+	if ( allocated_pci ) {
+		free ( pci );
 	}
 
 	return 0;
