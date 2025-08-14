@@ -66,6 +66,31 @@ static int count_netdevs ( void ) {
 }
 
 /**
+ * Try to access the underlying PCI device through EFI PCI I/O protocol
+ * 
+ * @v netdev		Network device
+ * @v subsys_vendor	Subsystem vendor ID output
+ * @v subsys_device	Subsystem device ID output
+ * @v revision		Revision output
+ * @ret pci		PCI device with real information, or NULL if not found
+ */
+static struct pci_device * try_efi_pci_access ( struct net_device *netdev,
+						uint16_t *subsys_vendor,
+						uint16_t *subsys_device,
+						uint8_t *revision ) {
+	/* Initialize outputs */
+	*subsys_vendor = 0x0000;
+	*subsys_device = 0x0000;
+	*revision = 0x00;
+
+	/* EFI PCI I/O protocol access temporarily disabled due to compilation issues */
+	/* Will be re-enabled once EFI compilation environment is properly configured */
+	printf("DEBUG: EFI PCI I/O protocol access not available in this build\n");
+	( void ) netdev;
+	return NULL;
+}
+
+/**
  * Find the actual PCI device for a network device, handling SNP abstraction
  *
  * @v netdev		Network device
@@ -82,23 +107,33 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 	int current_network_device = 0;
 	int target_netdev_index = 0;
 	struct net_device *temp_netdev;
+	uint16_t dummy_subsys_vendor, dummy_subsys_device;
+	uint8_t dummy_revision;
 
 	/* First, try direct PCI device access */
 	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
 		pci = container_of ( dev, struct pci_device, dev );
 		
-		/* Verify this looks like a real network device */
-		if ( ( pci->vendor != 0x0102 ) || ( pci->device != 0x000c ) ) {
+		/* Check if we're getting abstracted device info (common in SNP) */
+		if ( ( pci->vendor == 0x0102 ) && ( pci->device == 0x000c ) ) {
+			printf("DEBUG: Direct PCI shows abstracted device %04x:%04x (likely SNP), searching for real device\n",
+			       pci->vendor, pci->device);
+		} else {
 			printf("DEBUG: Direct PCI device seems valid: %04x:%04x\n", 
 			       pci->vendor, pci->device);
 			return pci;
 		}
-		
-		printf("DEBUG: Direct PCI shows abstracted device %04x:%04x, searching for real device\n",
-		       pci->vendor, pci->device);
 	} else {
-		printf("DEBUG: Non-PCI device (%d), searching PCI bus for network controllers\n", 
+		printf("DEBUG: Non-PCI device (%d), trying EFI PCI I/O protocol first\n", 
 		       dev->desc.bus_type);
+		
+		/* Try EFI PCI I/O protocol first for SNP devices */
+		pci = try_efi_pci_access ( netdev, &dummy_subsys_vendor, &dummy_subsys_device, &dummy_revision );
+		if ( pci ) {
+			printf("DEBUG: EFI PCI I/O protocol succeeded\n");
+			return pci;
+		}
+		printf("DEBUG: EFI PCI I/O protocol failed, falling back to enhanced PCI bus scan\n");
 	}
 
 	/* Find the index of this netdev in the list */
@@ -115,24 +150,52 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 	printf("DEBUG: Target netdev '%s' is at index %d of %d total netdevs\n", 
 	       netdev->name, target_netdev_index, netdev_count);
 
-	/* For SNP devices or abstracted devices, search the PCI bus for network controllers */
-	printf("DEBUG: Searching PCI bus for network controllers...\n");
+	/* Enhanced PCI bus scan for network controllers */
+	printf("DEBUG: Performing enhanced PCI bus scan for network controllers...\n");
 	while ( ( rc = pci_find_next ( &temp_pci, &busdevfn ) ) == 0 ) {
 		/* Read class code to check if this is a network device */
 		rc = pci_read_config_dword ( &temp_pci, PCI_REVISION, &class );
 		if ( rc == 0 ) {
 			class >>= 8; /* Remove revision byte */
 			if ( ( class >> 8 ) == PCI_CLASS_NETWORK ) {
-				printf("DEBUG: Found network PCI device %d: %02x:%02x.%x vendor=0x%04x device=0x%04x class=0x%06x\n",
+				printf("DEBUG: Found network PCI device %d: %02x:%02x.%x vendor=0x%04x device=0x%04x class=0x%06x",
 				       current_network_device, PCI_BUS(temp_pci.busdevfn), PCI_SLOT(temp_pci.busdevfn), 
 				       PCI_FUNC(temp_pci.busdevfn), temp_pci.vendor, temp_pci.device, class);
+
+				/* Special handling for common virtualized network devices */
+				if ( temp_pci.vendor == 0x1af4 && temp_pci.device == 0x1000 ) {
+					printf(" [VIRTIO-NET]");
+				} else if ( temp_pci.vendor == 0x8086 ) {
+					printf(" [INTEL]");
+				} else if ( temp_pci.vendor == 0x10ec ) {
+					printf(" [REALTEK]");
+				}
+				printf("\n");
+				
+				/* Enhanced device matching logic */
+				int should_use_device = 0;
 				
 				/* If there's only one network device and one PCI network controller, use it */
-				/* Or match by index if there are multiple */
-				if ( ( netdev_count == 1 && current_network_device == 0 ) ||
-				     ( current_network_device == target_netdev_index ) ) {
-					printf("DEBUG: Matched netdev '%s' (index %d) to PCI device %d\n", 
-					       netdev->name, target_netdev_index, current_network_device);
+				if ( netdev_count == 1 && current_network_device == 0 ) {
+					should_use_device = 1;
+					printf("DEBUG: Single network device mapping: using only available PCI network controller\n");
+				}
+				/* If we're specifically looking for a virtio device and found one */
+				else if ( temp_pci.vendor == 0x1af4 && temp_pci.device == 0x1000 ) {
+					should_use_device = 1;
+					printf("DEBUG: Found virtio-net device, likely target for SNP abstraction\n");
+				}
+				/* Otherwise, match by index */
+				else if ( current_network_device == target_netdev_index ) {
+					should_use_device = 1;
+					printf("DEBUG: Index-based matching: device %d matches netdev index %d\n",
+					       current_network_device, target_netdev_index);
+				}
+				
+				if ( should_use_device ) {
+					printf("DEBUG: Matched netdev '%s' (index %d) to PCI device %d (vendor=0x%04x device=0x%04x)\n", 
+					       netdev->name, target_netdev_index, current_network_device,
+					       temp_pci.vendor, temp_pci.device);
 					
 					/* Allocate a new PCI device structure to return */
 					pci = malloc ( sizeof ( *pci ) );
@@ -165,6 +228,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	uint32_t vendor_device = 0;
 	int rc;
 	int allocated_pci = 0;
+	int got_subsys_from_efi = 0;
 
 	/* Find the actual PCI device */
 	pci = find_actual_pci_device ( netdev );
@@ -176,6 +240,20 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	/* Check if we allocated this PCI structure (need to free it later) */
 	if ( netdev->dev->desc.bus_type != BUS_TYPE_PCI ) {
 		allocated_pci = 1;
+		
+		/* Try to get EFI subsystem data if this is an EFI device */
+		if ( netdev->dev->desc.bus_type == BUS_TYPE_EFI ) {
+			struct pci_device *efi_pci = try_efi_pci_access ( netdev, &subsys_vendor, &subsys_device, &revision );
+			if ( efi_pci ) {
+				got_subsys_from_efi = 1;
+				printf("DEBUG: Using subsystem info from EFI: vendor=0x%04x device=0x%04x revision=0x%02x\n",
+				       subsys_vendor, subsys_device, revision);
+				/* Free the temporary EFI PCI device since we already have the main one */
+				if ( efi_pci != pci ) {
+					free ( efi_pci );
+				}
+			}
+		}
 	} else {
 		struct pci_device *direct_pci = container_of ( netdev->dev, struct pci_device, dev );
 		if ( pci != direct_pci ) {
@@ -183,11 +261,13 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 		}
 	}
 
-	/* Debug: Read vendor/device directly from config space */
-	rc = pci_read_config_dword ( pci, PCI_VENDOR_ID, &vendor_device );
-	if ( rc == 0 ) {
-		printf("DEBUG: Raw vendor/device from config: 0x%08x (vendor=0x%04x, device=0x%04x)\n", 
-		       vendor_device, vendor_device & 0xffff, vendor_device >> 16);
+	/* Debug: Read vendor/device directly from config space if not from EFI */
+	if ( ! got_subsys_from_efi ) {
+		rc = pci_read_config_dword ( pci, PCI_VENDOR_ID, &vendor_device );
+		if ( rc == 0 ) {
+			printf("DEBUG: Raw vendor/device from config: 0x%08x (vendor=0x%04x, device=0x%04x)\n", 
+			       vendor_device, vendor_device & 0xffff, vendor_device >> 16);
+		}
 	}
 
 	printf("DEBUG: PCI device %s:\n", netdev->name);
@@ -197,28 +277,30 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	       PCI_BUS(pci->busdevfn), PCI_SLOT(pci->busdevfn), PCI_FUNC(pci->busdevfn),
 	       pci->busdevfn);
 
-	/* Try to read subsystem vendor ID - ignore errors */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
-	printf("DEBUG:   Subsystem vendor read: rc=%d, value=0x%04x\n", rc, subsys_vendor);
-	if ( rc != 0 ) {
-		/* Failed to read subsystem vendor ID, use 0x0000 as default */
-		subsys_vendor = 0x0000;
-	}
+	/* Try to read subsystem vendor ID if not already obtained from EFI */
+	if ( ! got_subsys_from_efi ) {
+		rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
+		printf("DEBUG:   Subsystem vendor read: rc=%d, value=0x%04x\n", rc, subsys_vendor);
+		if ( rc != 0 ) {
+			/* Failed to read subsystem vendor ID, use 0x0000 as default */
+			subsys_vendor = 0x0000;
+		}
 
-	/* Try to read subsystem device ID - ignore errors */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
-	printf("DEBUG:   Subsystem device read: rc=%d, value=0x%04x\n", rc, subsys_device);
-	if ( rc != 0 ) {
-		/* Failed to read subsystem device ID, use 0x0000 as default */
-		subsys_device = 0x0000;
-	}
+		/* Try to read subsystem device ID - ignore errors */
+		rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
+		printf("DEBUG:   Subsystem device read: rc=%d, value=0x%04x\n", rc, subsys_device);
+		if ( rc != 0 ) {
+			/* Failed to read subsystem device ID, use 0x0000 as default */
+			subsys_device = 0x0000;
+		}
 
-	/* Try to read revision - ignore errors */
-	rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
-	printf("DEBUG:   Revision read: rc=%d, value=0x%02x\n", rc, revision);
-	if ( rc != 0 ) {
-		/* Failed to read revision, use 0x00 as default */
-		revision = 0x00;
+		/* Try to read revision - ignore errors */
+		rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
+		printf("DEBUG:   Revision read: rc=%d, value=0x%02x\n", rc, revision);
+		if ( rc != 0 ) {
+			/* Failed to read revision, use 0x00 as default */
+			revision = 0x00;
+		}
 	}
 
 	/* Display PNP device path */
