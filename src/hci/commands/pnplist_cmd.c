@@ -95,10 +95,19 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	}
 
 	/* Display PNP device path */
-	printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
-		 pci->vendor, pci->device, subsys_device, subsys_vendor,
-		 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-		 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+	if ( ( subsys_vendor == 0x0000 ) && ( subsys_device == 0x0000 ) ) {
+		/* No subsystem ID - use vendor and device ID as fallback */
+		printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+			 pci->vendor, pci->device, pci->device, pci->vendor,
+			 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+			 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+	} else {
+		/* Use actual subsystem IDs */
+		printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+			 pci->vendor, pci->device, subsys_device, subsys_vendor,
+			 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+			 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+	}
 
 	return 0;
 }
