@@ -123,8 +123,11 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
 		pci = container_of ( dev, struct pci_device, dev );
 		
+		printf ( "DEBUG: Direct PCI device vendor=0x%04x device=0x%04x\n", pci->vendor, pci->device );
+		
 		/* Check if we're getting abstracted device info (common in SNP) */
 		if ( is_abstracted_device( pci->vendor, pci->device ) ) {
+			printf ( "DEBUG: Detected abstracted device, will scan PCI bus\n" );
 			requires_enhanced_scan = 1;
 		} else {
 			/* Verify the stored values match config space */
@@ -133,12 +136,15 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 				uint16_t config_vendor = vendor_device & 0xffff;
 				uint16_t config_device = vendor_device >> 16;
 				if ( config_vendor == pci->vendor && config_device == pci->device ) {
+					printf ( "DEBUG: Direct device verified, using it\n" );
 					return pci; /* Values match, device is valid */
 				}
 			}
+			printf ( "DEBUG: Direct device verification failed, will scan PCI bus\n" );
 			requires_enhanced_scan = 1;
 		}
 	} else {
+		printf ( "DEBUG: Non-PCI device, will scan PCI bus\n" );
 		requires_enhanced_scan = 1;
 	}
 
@@ -156,6 +162,8 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 	
 	/* Count total network devices */
 	netdev_count = count_netdevs();
+	
+	printf ( "DEBUG: Enhanced scan - netdev_count=%d, target_index=%d\n", netdev_count, target_netdev_index );
 
 	/* Enhanced PCI bus scan for network controllers */
 	while ( ( rc = pci_find_next ( &temp_pci, &busdevfn ) ) == 0 ) {
@@ -171,32 +179,22 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 					temp_pci.device = vendor_device >> 16;
 				}
 				
-				/* Enhanced device matching logic with multiple strategies */
+				printf ( "DEBUG: Found network controller #%d: vendor=0x%04x device=0x%04x\n", 
+					 current_network_device, temp_pci.vendor, temp_pci.device );
+				
+				/* Device matching logic: for single device, use first found; for multiple, use index */
 				int should_use_device = 0;
 				
-				/* Strategy 1: Single network device scenario (most common) */
-				if ( netdev_count == 1 && current_network_device == 0 ) {
+				if ( netdev_count == 1 ) {
+					/* Single network device: use the first real network controller found */
 					should_use_device = 1;
-				}
-				/* Strategy 2: Virtio-net device detection (common in virtualized environments) */
-				else if ( temp_pci.vendor == 0x1af4 && ( temp_pci.device == 0x1000 || temp_pci.device == 0x1041 ) ) {
-					should_use_device = 1;
-				}
-				/* Strategy 3: Intel network devices (very common) */
-				else if ( temp_pci.vendor == 0x8086 && current_network_device == target_netdev_index ) {
-					should_use_device = 1;
-				}
-				/* Strategy 4: Broadcom network devices */
-				else if ( temp_pci.vendor == 0x14e4 && current_network_device == target_netdev_index ) {
-					should_use_device = 1;
-				}
-				/* Strategy 5: Realtek network devices */
-				else if ( temp_pci.vendor == 0x10ec && current_network_device == target_netdev_index ) {
-					should_use_device = 1;
-				}
-				/* Strategy 6: Index-based matching for multiple devices (fallback) */
-				else if ( current_network_device == target_netdev_index ) {
-					should_use_device = 1;
+					printf ( "DEBUG: Single device - using this one\n" );
+				} else {
+					/* Multiple devices: match by index */
+					if ( current_network_device == target_netdev_index ) {
+						should_use_device = 1;
+						printf ( "DEBUG: Multiple devices - index match, using this one\n" );
+					}
 				}
 				
 				if ( should_use_device ) {
@@ -204,6 +202,8 @@ static struct pci_device * find_actual_pci_device ( struct net_device *netdev ) 
 					pci = malloc ( sizeof ( *pci ) );
 					if ( pci ) {
 						memcpy ( pci, &temp_pci, sizeof ( *pci ) );
+						printf ( "DEBUG: Returning enhanced scan result: vendor=0x%04x device=0x%04x\n", 
+							 pci->vendor, pci->device );
 						return pci;
 					}
 				}
@@ -234,6 +234,10 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	if ( ! pci ) {
 		return 0; /* Skip non-PCI devices */
 	}
+
+	/* Debug: Show what we found */
+	printf ( "DEBUG: Found PCI device vendor=0x%04x device=0x%04x for netdev\n", 
+		 pci->vendor, pci->device );
 
 	/* Check if we allocated this PCI structure (need to free it later) */
 	if ( netdev->dev->desc.bus_type != BUS_TYPE_PCI ) {
