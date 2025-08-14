@@ -59,6 +59,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	struct pci_device *pci;
 	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
 	uint8_t revision = 0x00;
+	uint32_t vendor_device = 0;
 	int rc;
 
 	/* Check if this is a PCI device */
@@ -70,8 +71,23 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	/* Get PCI device */
 	pci = container_of ( dev, struct pci_device, dev );
 
+	/* Debug: Read vendor/device directly from config space */
+	rc = pci_read_config_dword ( pci, PCI_VENDOR_ID, &vendor_device );
+	if ( rc == 0 ) {
+		printf("DEBUG: Raw vendor/device from config: 0x%08x (vendor=0x%04x, device=0x%04x)\n", 
+		       vendor_device, vendor_device & 0xffff, vendor_device >> 16);
+	}
+
+	printf("DEBUG: PCI device %s:\n", netdev->name);
+	printf("DEBUG:   Stored vendor: 0x%04x\n", pci->vendor);
+	printf("DEBUG:   Stored device: 0x%04x\n", pci->device);
+	printf("DEBUG:   Bus:Dev.Fn: %02x:%02x.%x (busdevfn=0x%08x)\n", 
+	       PCI_BUS(pci->busdevfn), PCI_SLOT(pci->busdevfn), PCI_FUNC(pci->busdevfn),
+	       pci->busdevfn);
+
 	/* Try to read subsystem vendor ID - ignore errors */
 	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
+	printf("DEBUG:   Subsystem vendor read: rc=%d, value=0x%04x\n", rc, subsys_vendor);
 	if ( rc != 0 ) {
 		/* Failed to read subsystem vendor ID, use 0x0000 as default */
 		subsys_vendor = 0x0000;
@@ -79,6 +95,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 
 	/* Try to read subsystem device ID - ignore errors */
 	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
+	printf("DEBUG:   Subsystem device read: rc=%d, value=0x%04x\n", rc, subsys_device);
 	if ( rc != 0 ) {
 		/* Failed to read subsystem device ID, use 0x0000 as default */
 		subsys_device = 0x0000;
@@ -86,6 +103,7 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 
 	/* Try to read revision - ignore errors */
 	rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
+	printf("DEBUG:   Revision read: rc=%d, value=0x%02x\n", rc, revision);
 	if ( rc != 0 ) {
 		/* Failed to read revision, use 0x00 as default */
 		revision = 0x00;
