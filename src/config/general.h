@@ -161,6 +161,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 //#define IMAGE_TRUST_CMD	/* Image trust management commands */
 //#define IMAGE_CRYPT_CMD	/* Image encryption management commands */
 //#define PCI_CMD		/* PCI commands */
+//#define PNPLIST_CMD		/* PNP device path listing command */
 //#define PARAM_CMD		/* Request parameter commands */
 //#define NEIGHBOUR_CMD		/* Neighbour management commands */
 //#define PING_CMD		/* Ping command */
