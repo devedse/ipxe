@@ -129,6 +129,36 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 }
 
 /**
+ * Debug function to enumerate all PCI devices and find network controllers
+ */
+static void debug_enumerate_pci_devices ( void ) {
+	struct pci_device pci;
+	uint32_t busdevfn = 0;
+	int rc;
+	int count = 0;
+
+	printf("=== All PCI Devices ===\n");
+	
+	/* Find all PCI devices */
+	while ( ( rc = pci_find_next ( &pci, &busdevfn ) ) == 0 ) {
+		count++;
+		printf("PCI %02x:%02x.%x: vendor=0x%04x device=0x%04x class=0x%06x",
+		       PCI_BUS(pci.busdevfn), PCI_SLOT(pci.busdevfn), PCI_FUNC(pci.busdevfn),
+		       pci.vendor, pci.device, pci.class);
+		
+		/* Check if this is a network device */
+		if ( ( pci.class >> 8 ) == PCI_CLASS_NETWORK ) {
+			printf(" [NETWORK]");
+		}
+		printf("\n");
+		
+		busdevfn++;
+	}
+	
+	printf("Total PCI devices found: %d\n\n", count);
+}
+
+/**
  * "pnplist" command
  *
  * @v argc		Argument count
@@ -144,6 +174,10 @@ static int pnplist_exec ( int argc, char **argv ) {
 	if ( ( rc = parse_options ( argc, argv, &pnplist_cmd, &opts ) ) != 0 )
 		return rc;
 
+	/* Debug: Enumerate all PCI devices first */
+	debug_enumerate_pci_devices();
+
+	printf("=== Network Devices ===\n");
 	/* Iterate through all network devices */
 	for_each_netdev ( netdev ) {
 		if ( ( rc = pnplist_show_device ( netdev ) ) != 0 )
