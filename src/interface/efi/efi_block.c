@@ -284,6 +284,14 @@ static int efi_block_hook ( unsigned int drive, struct uri **uris,
 		( sandev->capacity.blksize << sandev->blksize_shift );
 	block->media.LastBlock =
 		( ( sandev->capacity.blocks >> sandev->blksize_shift ) - 1 );
+	
+	/* Configure for CD-ROM if applicable */
+	if ( sandev->is_cdrom ) {
+		block->media.RemovableMedia = TRUE;
+		block->media.ReadOnly = TRUE;
+		DBGC ( drive, "EFIBLK %#02x configured as removable CD-ROM\n",
+		       drive );
+	}
 
 	/* Construct device path */
 	if ( ! sandev->active ) {
