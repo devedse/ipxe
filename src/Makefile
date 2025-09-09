@@ -214,29 +214,14 @@ install :
 #
 # Version number calculations
 #
-ifneq ($(wildcard ../.git),)
-VERSIONS := $(shell git describe --tags --always --long --abbrev=1 --match "v*")
-VERSION_TUPLE	:= $(subst ., ,$(subst -, ,$(patsubst v%,%,$(VERSIONS))))
-VERSION_MAJOR	:= $(word 1,$(VERSION_TUPLE))
-VERSION_MINOR	:= $(word 2,$(VERSION_TUPLE))
-VERSION_PATCH	:= $(word 3,$(VERSION_TUPLE))
-ifeq ($(word 4,$(VERSION_TUPLE)),0)
-EXTRAVERSION	:=
-else
-EXTRAVERSION	:= +
-endif
-GITVERSION	= $(word 5,$(VERSION_TUPLE))
-else
+# Force numeric version to avoid git hash parsing issues
 VERSION_MAJOR	= 1
-VERSION_MINOR	= 0
-VERSION_PATCH	= 0
+VERSION_MINOR	= 21
+VERSION_PATCH	= 1
 EXTRAVERSION	= +
-endif
+GITVERSION	= 
 MM_VERSION	= $(VERSION_MAJOR).$(VERSION_MINOR)
 VERSION		= $(MM_VERSION).$(VERSION_PATCH)$(EXTRAVERSION)
-ifneq ($(GITVERSION),)
-VERSION		+= ($(GITVERSION))
-endif
 version :
 	@$(ECHO) "$(VERSION)"
 

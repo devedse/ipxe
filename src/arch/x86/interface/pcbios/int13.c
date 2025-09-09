@@ -665,6 +665,11 @@ static int int13_get_disk_type ( struct san_device *sandev,
 
 	if ( int13_is_fdd ( sandev ) ) {
 		return INT13_DISK_TYPE_FDD;
+	} else if ( sandev->is_cdrom ) {
+		/* Return CD-ROM disk type for CD-ROM devices */
+		DBGC ( sandev->drive, "INT13 drive %02x reporting as CD-ROM\n",
+		       sandev->drive );
+		return INT13_DISK_TYPE_CDROM;
 	} else {
 		blocks = int13_capacity32 ( sandev );
 		ix86->regs.cx = ( blocks >> 16 );

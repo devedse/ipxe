@@ -141,6 +141,8 @@ struct int13_disk_parameters {
 #define INT13_DISK_TYPE_FDD_CL	0x02
 /** Hard disk */
 #define INT13_DISK_TYPE_HDD	0x03
+/** CD-ROM */
+#define INT13_DISK_TYPE_CDROM	0x05
 
 /** @} */
 

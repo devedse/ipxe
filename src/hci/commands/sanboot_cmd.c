@@ -47,6 +47,8 @@ struct sanboot_options {
 	int no_describe;
 	/** Keep SAN device */
 	int keep;
+	/** Force CD-ROM mode */
+	int force_cdrom;
 	/** Boot filename */
 	char *filename;
 	/** Required extra filename */
@@ -60,9 +62,9 @@ struct sanboot_options {
 /** "sanboot" option list */
 static union {
 	/* "sanboot" takes all options */
-	struct option_descriptor sanboot[7];
-	/* "sanhook" takes only --drive and --no-describe */
-	struct option_descriptor sanhook[2];
+	struct option_descriptor sanboot[8];
+	/* "sanhook" takes only --drive, --no-describe, and --force-cdrom */
+	struct option_descriptor sanhook[3];
 	/* "sanunhook" takes only --drive */
 	struct option_descriptor sanunhook[1];
 } opts = {
@@ -71,6 +73,8 @@ static union {
 			      struct sanboot_options, drive, parse_integer ),
 		OPTION_DESC ( "no-describe", 'n', no_argument,
 			      struct sanboot_options, no_describe, parse_flag ),
+		OPTION_DESC ( "force-cdrom", 'c', no_argument,
+			      struct sanboot_options, force_cdrom, parse_flag ),
 		OPTION_DESC ( "keep", 'k', no_argument,
 			      struct sanboot_options, keep, parse_flag ),
 		OPTION_DESC ( "filename", 'f', required_argument,
@@ -148,6 +152,8 @@ static int sanboot_core_exec ( int argc, char **argv,
 		flags |= URIBOOT_NO_SAN_DESCRIBE;
 	if ( opts.keep )
 		flags |= URIBOOT_NO_SAN_UNHOOK;
+	if ( opts.force_cdrom )
+		flags |= URIBOOT_FORCE_SAN_CDROM;
 	if ( ! count )
 		flags |= no_root_path_flags;
 
