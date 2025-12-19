@@ -69,7 +69,12 @@ int efi_connect ( EFI_HANDLE device, EFI_HANDLE driver ) {
 	       efi_tpl_name ( efi_external_tpl ) );
 	printf ( "DEBUG: About to call ConnectController for %s\n", efi_handle_name ( device ) );
 	bs->RestoreTPL ( efi_external_tpl );
-	efirc = bs->ConnectController ( device, drivers, NULL, TRUE );
+	/* Try recursive=FALSE to avoid connecting other drivers? 
+	   But we want to connect OUR driver. 
+	   If we pass 'drivers' list, it should prioritize us. 
+	   If we pass Recursive=FALSE, it might not connect children? 
+	   But we are connecting the controller itself. */
+	efirc = bs->ConnectController ( device, drivers, NULL, FALSE );
 	bs->RaiseTPL ( efi_internal_tpl );
 	printf ( "DEBUG: Returned from ConnectController for %s\n", efi_handle_name ( device ) );
 	if ( efirc != 0 ) {

@@ -553,6 +553,9 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 		       "%s\n", efi_handle_name ( device ), strerror ( rc ) );
 		DBGC ( device, "EFIDRV %s connecting driver directly\n",
 		       efi_handle_name ( device ) );
+		/* Try connecting directly if ConnectController failed or hung? 
+		   Wait, if ConnectController hung, we never get here. 
+		   But if it failed, we try direct start. */
 		if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
 						  NULL ) ) != 0 ) {
 			rc = -EEFI ( efirc );
