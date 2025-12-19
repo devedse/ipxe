@@ -38,6 +38,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/dhcp.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
+#include <ipxe/efi/efi_strings.h>
 #include <ipxe/efi/efi_path.h>
 
 /** @file
@@ -45,6 +46,34 @@ FILE_LICENCE ( GPL2_OR_LATER );
  * EFI device paths
  *
  */
+
+/** Dummy parent device path
+ *
+ * This is used as the parent device path when we need to construct a
+ * path for a device that has no EFI parent device.
+ */
+static struct {
+	BBS_BBS_DEVICE_PATH bbs;
+	CHAR8 tring[4];
+	EFI_DEVICE_PATH_PROTOCOL end;
+} __attribute__ (( packed )) efi_dummy_parent_path = {
+	.bbs = {
+		.Header = {
+			.Type = BBS_DEVICE_PATH,
+			.SubType = BBS_BBS_DP,
+			.Length[0] = ( sizeof ( efi_dummy_parent_path.bbs ) +
+				       sizeof ( efi_dummy_parent_path.tring )),
+		},
+		.DeviceType = BBS_TYPE_UNKNOWN,
+		.String[0] = 'i',
+	},
+	.tring = "PXE",
+	.end = {
+		.Type = END_DEVICE_PATH_TYPE,
+		.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE,
+		.Length[0] = sizeof ( efi_dummy_parent_path.end ),
+	},
+};
 
 /** An EFI device path settings block */
 struct efi_path_settings {
@@ -145,6 +174,33 @@ size_t efi_path_len ( EFI_DEVICE_PATH_PROTOCOL *path ) {
 	EFI_DEVICE_PATH_PROTOCOL *end = efi_path_end ( path );
 
 	return ( ( ( void * ) end ) - ( ( void * ) path ) );
+}
+
+/**
+ * Check that device path is well-formed
+ *
+ * @v path		Device path, or NULL
+ * @v max		Maximum device path length
+ * @ret rc		Return status code
+ */
+int efi_path_check ( EFI_DEVICE_PATH_PROTOCOL *path, size_t max ) {
+	EFI_DEVICE_PATH_PROTOCOL *next;
+	size_t remaining = max;
+	size_t len;
+
+	/* Check that path terminates within maximum length */
+	for ( ; ; path = next ) {
+		if ( remaining < sizeof ( *path ) )
+			return -EINVAL;
+		next = efi_path_next ( path );
+		if ( ! next )
+			break;
+		len = ( ( ( void * ) next ) - ( ( void * ) path ) );
+		if ( remaining < len )
+			return -EINVAL;
+	}
+
+	return 0;
 }
 
 /**
@@ -325,6 +381,24 @@ EFI_DEVICE_PATH_PROTOCOL * efi_paths ( EFI_DEVICE_PATH_PROTOCOL *first, ... ) {
 }
 
 /**
+ * Construct EFI parent device path
+ *
+ * @v dev		Generic device
+ * @ret path		Parent (or dummy) device path
+ */
+static EFI_DEVICE_PATH_PROTOCOL * efi_parent_path ( struct device *dev ) {
+	struct efi_device *efidev;
+
+	/* Use EFI parent device's path, if possible */
+	efidev = efidev_parent ( dev );
+	if ( efidev )
+		return efidev->path;
+
+	/* Otherwise, use a dummy parent device path */
+	return &efi_dummy_parent_path.bbs.Header;
+}
+
+/**
  * Construct EFI device path for network device
  *
  * @v netdev		Network device
@@ -334,7 +408,7 @@ EFI_DEVICE_PATH_PROTOCOL * efi_paths ( EFI_DEVICE_PATH_PROTOCOL *first, ... ) {
  * allocated device path.
  */
 EFI_DEVICE_PATH_PROTOCOL * efi_netdev_path ( struct net_device *netdev ) {
-	struct efi_device *efidev;
+	EFI_DEVICE_PATH_PROTOCOL *parent;
 	EFI_DEVICE_PATH_PROTOCOL *path;
 	MAC_ADDR_DEVICE_PATH *macpath;
 	VLAN_DEVICE_PATH *vlanpath;
@@ -343,13 +417,11 @@ EFI_DEVICE_PATH_PROTOCOL * efi_netdev_path ( struct net_device *netdev ) {
 	size_t prefix_len;
 	size_t len;
 
-	/* Find parent EFI device */
-	efidev = efidev_parent ( netdev->dev );
-	if ( ! efidev )
-		return NULL;
+	/* Get parent EFI device path */
+	parent = efi_parent_path ( netdev->dev );
 
 	/* Calculate device path length */
-	prefix_len = efi_path_len ( efidev->path );
+	prefix_len = efi_path_len ( parent );
 	len = ( prefix_len + sizeof ( *macpath ) + sizeof ( *vlanpath ) +
 		sizeof ( *end ) );
 
@@ -359,7 +431,7 @@ EFI_DEVICE_PATH_PROTOCOL * efi_netdev_path ( struct net_device *netdev ) {
 		return NULL;
 
 	/* Construct device path */
-	memcpy ( path, efidev->path, prefix_len );
+	memcpy ( path, parent, prefix_len );
 	macpath = ( ( ( void * ) path ) + prefix_len );
 	macpath->Header.Type = MESSAGING_DEVICE_PATH;
 	macpath->Header.SubType = MSG_MAC_ADDR_DP;
@@ -573,20 +645,18 @@ EFI_DEVICE_PATH_PROTOCOL * efi_ib_srp_path ( struct ib_srp_device *ib_srp ) {
 	union ib_srp_target_port_id *id =
 		container_of ( &sbft->srp.target, union ib_srp_target_port_id,
 			       srp );
-	struct efi_device *efidev;
+	EFI_DEVICE_PATH_PROTOCOL *parent;
 	EFI_DEVICE_PATH_PROTOCOL *path;
 	INFINIBAND_DEVICE_PATH *ibpath;
 	EFI_DEVICE_PATH_PROTOCOL *end;
 	size_t prefix_len;
 	size_t len;
 
-	/* Find parent EFI device */
-	efidev = efidev_parent ( ib_srp->ibdev->dev );
-	if ( ! efidev )
-		return NULL;
+	/* Get parent EFI device path */
+	parent = efi_parent_path ( ib_srp->ibdev->dev );
 
 	/* Calculate device path length */
-	prefix_len = efi_path_len ( efidev->path );
+	prefix_len = efi_path_len ( parent );
 	len = ( prefix_len + sizeof ( *ibpath ) + sizeof ( *end ) );
 
 	/* Allocate device path */
@@ -595,7 +665,7 @@ EFI_DEVICE_PATH_PROTOCOL * efi_ib_srp_path ( struct ib_srp_device *ib_srp ) {
 		return NULL;
 
 	/* Construct device path */
-	memcpy ( path, efidev->path, prefix_len );
+	memcpy ( path, parent, prefix_len );
 	ibpath = ( ( ( void * ) path ) + prefix_len );
 	ibpath->Header.Type = MESSAGING_DEVICE_PATH;
 	ibpath->Header.SubType = MSG_INFINIBAND_DP;
@@ -625,7 +695,7 @@ EFI_DEVICE_PATH_PROTOCOL * efi_ib_srp_path ( struct ib_srp_device *ib_srp ) {
  */
 EFI_DEVICE_PATH_PROTOCOL * efi_usb_path ( struct usb_function *func ) {
 	struct usb_device *usb = func->usb;
-	struct efi_device *efidev;
+	EFI_DEVICE_PATH_PROTOCOL *parent;
 	EFI_DEVICE_PATH_PROTOCOL *path;
 	EFI_DEVICE_PATH_PROTOCOL *end;
 	USB_DEVICE_PATH *usbpath;
@@ -636,14 +706,12 @@ EFI_DEVICE_PATH_PROTOCOL * efi_usb_path ( struct usb_function *func ) {
 	/* Sanity check */
 	assert ( func->desc.count >= 1 );
 
-	/* Find parent EFI device */
-	efidev = efidev_parent ( &func->dev );
-	if ( ! efidev )
-		return NULL;
+	/* Get parent EFI device path */
+	parent = efi_parent_path ( &func->dev );
 
 	/* Calculate device path length */
 	count = ( usb_depth ( usb ) + 1 );
-	prefix_len = efi_path_len ( efidev->path );
+	prefix_len = efi_path_len ( parent );
 	len = ( prefix_len + ( count * sizeof ( *usbpath ) ) +
 		sizeof ( *end ) );
 
@@ -653,7 +721,7 @@ EFI_DEVICE_PATH_PROTOCOL * efi_usb_path ( struct usb_function *func ) {
 		return NULL;
 
 	/* Construct device path */
-	memcpy ( path, efidev->path, prefix_len );
+	memcpy ( path, parent, prefix_len );
 	end = ( ( ( void * ) path ) + len - sizeof ( *end ) );
 	efi_path_terminate ( end );
 	usbpath = ( ( ( void * ) end ) - sizeof ( *usbpath ) );
@@ -666,6 +734,177 @@ EFI_DEVICE_PATH_PROTOCOL * efi_usb_path ( struct usb_function *func ) {
 	}
 
 	return path;
+}
+
+/**
+ * Get EFI device path from load option
+ *
+ * @v load		EFI load option
+ * @v len		Length of EFI load option
+ * @ret path		EFI device path, or NULL on error
+ *
+ * The caller is responsible for eventually calling free() on the
+ * allocated device path.
+ */
+EFI_DEVICE_PATH_PROTOCOL * efi_load_path ( EFI_LOAD_OPTION *load,
+					   size_t len ) {
+	EFI_DEVICE_PATH_PROTOCOL *path;
+	EFI_DEVICE_PATH_PROTOCOL *copy;
+	CHAR16 *wdesc;
+	size_t path_max;
+	size_t wmax;
+	size_t wlen;
+
+	/* Check basic structure size */
+	if ( len < sizeof ( *load ) ) {
+		DBGC ( load, "EFI load option too short for header:\n" );
+		DBGC_HDA ( load, 0, load, len );
+		return NULL;
+	}
+
+	/* Get length of description */
+	wdesc = ( ( ( void * ) load ) + sizeof ( *load ) );
+	wmax = ( ( len - sizeof ( *load ) ) / sizeof ( wdesc[0] ) );
+	wlen = wcsnlen ( wdesc, wmax );
+	if ( wlen == wmax ) {
+		DBGC ( load, "EFI load option has unterminated "
+		       "description:\n" );
+		DBGC_HDA ( load, 0, load, len );
+		return NULL;
+	}
+
+	/* Get inline device path */
+	path = ( ( ( void * ) load ) + sizeof ( *load ) +
+		 ( wlen * sizeof ( wdesc[0] ) ) + 2 /* wNUL */ );
+	path_max = ( len - sizeof ( *load ) - ( wlen * sizeof ( wdesc[0] ) )
+		     - 2 /* wNUL */ );
+	if ( load->FilePathListLength > path_max ) {
+		DBGC ( load, "EFI load option too short for path(s):\n" );
+		DBGC_HDA ( load, 0, load, len );
+		return NULL;
+	}
+
+	/* Check path length */
+	if ( efi_path_check ( path, path_max ) != 0 ) {
+		DBGC ( load, "EFI load option has unterminated device "
+		       "path:\n" );
+		DBGC_HDA ( load, 0, load, len );
+		return NULL;
+	}
+
+	/* Allocate copy of path */
+	copy = malloc ( path_max );
+	if ( ! copy )
+		return NULL;
+	memcpy ( copy, path, path_max );
+
+	return copy;
+}
+
+/**
+ * Get EFI device path for numbered boot option
+ *
+ * @v number		Boot option number
+ * @ret path		EFI device path, or NULL on error
+ *
+ * The caller is responsible for eventually calling free() on the
+ * allocated device path.
+ */
+EFI_DEVICE_PATH_PROTOCOL * efi_boot_path ( unsigned int number ) {
+	EFI_RUNTIME_SERVICES *rs = efi_systab->RuntimeServices;
+	EFI_GUID *guid = &efi_global_variable;
+	CHAR16 wname[ 9 /* "BootXXXX" + wNUL */ ];
+	EFI_LOAD_OPTION *load;
+	EFI_DEVICE_PATH *path;
+	UINT32 attrs;
+	UINTN size;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Construct variable name */
+	efi_snprintf ( wname, ( sizeof ( wname ) / sizeof ( wname[0] ) ),
+		       "Boot%04X", number );
+
+	/* Get variable length */
+	size = 0;
+	if ( ( efirc = rs->GetVariable ( wname, guid, &attrs, &size,
+					 NULL ) != EFI_BUFFER_TOO_SMALL ) ) {
+		rc = -EEFI ( efirc );
+		DBGC ( rs, "EFI could not get size of %ls: %s\n",
+		       wname, strerror ( rc ) );
+		goto err_size;
+	}
+
+	/* Allocate temporary buffer for EFI_LOAD_OPTION */
+	load = malloc ( size );
+	if ( ! load ) {
+		rc = -ENOMEM;
+		goto err_alloc;
+	}
+
+	/* Read variable */
+	if ( ( efirc = rs->GetVariable ( wname, guid, &attrs, &size,
+					 load ) != 0 ) ) {
+		rc = -EEFI ( efirc );
+		DBGC ( rs, "EFI could not read %ls: %s\n",
+		       wname, strerror ( rc ) );
+		goto err_read;
+	}
+	DBGC2 ( rs, "EFI boot option %ls is:\n", wname );
+	DBGC2_HDA ( rs, 0, load, size );
+
+	/* Get device path from load option */
+	path = efi_load_path ( load, size );
+	if ( ! path ) {
+		rc = -EINVAL;
+		DBGC ( rs, "EFI could not parse %ls: %s\n",
+		       wname, strerror ( rc ) );
+		goto err_path;
+	}
+
+	/* Free temporary buffer */
+	free ( load );
+
+	return path;
+
+ err_path:
+ err_read:
+	free ( load );
+ err_alloc:
+ err_size:
+	return NULL;
+}
+
+/**
+ * Get EFI device path for current boot option
+ *
+ * @ret path		EFI device path, or NULL on error
+ *
+ * The caller is responsible for eventually calling free() on the
+ * allocated device path.
+ */
+EFI_DEVICE_PATH_PROTOCOL * efi_current_boot_path ( void ) {
+	EFI_RUNTIME_SERVICES *rs = efi_systab->RuntimeServices;
+	EFI_GUID *guid = &efi_global_variable;
+	CHAR16 wname[] = L"BootCurrent";
+	UINT16 current;
+	UINT32 attrs;
+	UINTN size;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Read current boot option index */
+	size = sizeof ( current );
+	if ( ( efirc = rs->GetVariable ( wname, guid, &attrs, &size,
+					 &current ) != 0 ) ) {
+		rc = -EEFI ( efirc );
+		DBGC ( rs, "EFI could not read %ls: %s\n",
+		       wname, strerror ( rc ) );
+		return NULL;
+	}
+
+	/* Get device path from this boot option */
+	return efi_boot_path ( current );
 }
 
 /**

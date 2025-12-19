@@ -29,6 +29,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/init.h>
 #include <ipxe/interface.h>
 #include <ipxe/device.h>
+#include <stdio.h>
 
 /**
  * @file
@@ -53,11 +54,15 @@ static int rootdev_probe ( struct root_device *rootdev ) {
 	int rc;
 
 	DBG ( "Adding %s root bus\n", rootdev->dev.name );
+	printf ( "Adding %s root bus\n", rootdev->dev.name );
 	if ( ( rc = rootdev->driver->probe ( rootdev ) ) != 0 ) {
 		DBG ( "Failed to add %s root bus: %s\n",
 		      rootdev->dev.name, strerror ( rc ) );
+		printf ( "Failed to add %s root bus: %s\n",
+		      rootdev->dev.name, strerror ( rc ) );
 		return rc;
 	}
+	printf ( "Added %s root bus\n", rootdev->dev.name );
 
 	return 0;
 }
@@ -83,12 +88,14 @@ static void probe_devices ( void ) {
 	struct root_device *rootdev;
 	int rc;
 
+	printf ( "Probing devices...\n" );
 	for_each_table_entry ( rootdev, ROOT_DEVICES ) {
 		list_add ( &rootdev->dev.siblings, &devices );
 		INIT_LIST_HEAD ( &rootdev->dev.children );
 		if ( ( rc = rootdev_probe ( rootdev ) ) != 0 )
 			list_del ( &rootdev->dev.siblings );
 	}
+	printf ( "Probing devices finished\n" );
 }
 
 /**

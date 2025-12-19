@@ -24,6 +24,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <ipxe/timer.h>
 #include <ipxe/image.h>
@@ -84,11 +85,13 @@ static int efi_autoexec_filesystem ( EFI_HANDLE handle, struct image **image ) {
 	}
 
 	/* Try loading from loaded image directory, if supported */
+	printf ( "Trying to load autoexec from loaded image directory...\n" );
 	if ( ( rc = imgacquire ( "file:" EFI_AUTOEXEC_NAME,
 				 EFI_AUTOEXEC_TIMEOUT, image ) ) == 0 )
 		return 0;
 
 	/* Try loading from root directory, if supported */
+	printf ( "Trying to load autoexec from root directory...\n" );
 	if ( ( rc = imgacquire ( "file:/" EFI_AUTOEXEC_NAME,
 				 EFI_AUTOEXEC_TIMEOUT, image ) ) == 0 )
 		return 0;
@@ -131,6 +134,7 @@ static int efi_autoexec_network ( EFI_HANDLE handle, struct image **image ) {
 	}
 
 	/* Attempt download */
+	printf ( "Attempting download of %s...\n", EFI_AUTOEXEC_NAME );
 	rc = imgacquire ( EFI_AUTOEXEC_NAME, EFI_AUTOEXEC_TIMEOUT, image );
 	if ( rc != 0 ) {
 		DBGC ( device, "EFI %s could not download %s: %s\n",
@@ -179,6 +183,7 @@ int efi_autoexec_load ( void ) {
 
 		/* Locate required protocol for this loader */
 		loader = &efi_autoexec_loaders[i];
+		printf ( "Checking loader %d...\n", i );
 		if ( ( rc = efi_locate_device ( device, loader->protocol,
 						&handle, 0 ) ) != 0 ) {
 			DBGC ( device, "EFI %s found no %s: %s\n",
@@ -193,6 +198,7 @@ int efi_autoexec_load ( void ) {
 		DBGC ( device, "%s\n", efi_handle_name ( handle ) );
 
 		/* Try loading */
+		printf ( "Loader %d found, trying to load...\n", i );
 		if ( ( rc = loader->load ( handle, &image ) ) != 0 )
 			return rc;
 
@@ -206,6 +212,7 @@ int efi_autoexec_load ( void ) {
 
 		DBGC ( device, "EFI %s loaded %s (%zd bytes)\n",
 		       efi_handle_name ( device ), image->name, image->len );
+		printf ( "EFI loaded %s (%zd bytes)\n", image->name, image->len );
 		return 0;
 	}
 

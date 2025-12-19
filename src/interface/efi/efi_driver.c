@@ -618,6 +618,9 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 			 * remaining handles.
 			 */
 		}
+		if ( i % 10 == 0 ) {
+			printf ( "Processed %d/%d handles\n", i, num_handles );
+		}
 	}
 
 	/* Success */
@@ -636,6 +639,7 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 int efi_driver_connect_all ( void ) {
 
 	DBGC ( &efi_driver_binding, "EFIDRV connecting our drivers\n" );
+	printf ( "EFIDRV connecting our drivers\n" );
 	return efi_driver_handles ( efi_driver_connect );
 }
 

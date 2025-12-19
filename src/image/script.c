@@ -181,6 +181,7 @@ static int script_exec_line ( struct image *image, size_t offset,
 	int rc;
 
 	DBGC ( image, "[%04zx] $ %s\n", offset, command );
+	printf ( "[%04zx] $ %s\n", offset, command );
 
 	/* Execute command */
 	if ( ( rc = system ( command ) ) != 0 )
@@ -198,6 +199,8 @@ static int script_exec_line ( struct image *image, size_t offset,
 static int script_exec ( struct image *image ) {
 	size_t saved_offset;
 	int rc;
+
+	printf ( "Executing script %s\n", image->name );
 
 	/* Preserve state of any currently-running script */
 	saved_offset = script_offset;

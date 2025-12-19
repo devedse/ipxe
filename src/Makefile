@@ -11,6 +11,7 @@ HOST_CFLAGS	:=
 MAKEDEPS	:= Makefile
 CROSS_COMPILE	?= $(CROSS)
 SYMBOL_PREFIX	:=
+DEBUG		:= efi_autoexec,script
 
 ###############################################################################
 #

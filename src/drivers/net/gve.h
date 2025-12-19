@@ -16,6 +16,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <stdint.h>
 #include <ipxe/dma.h>
 #include <ipxe/pci.h>
+#include <ipxe/pcimsix.h>
 #include <ipxe/in.h>
 #include <ipxe/process.h>
 #include <ipxe/retry.h>
@@ -155,9 +156,47 @@ struct gve_device_descriptor {
 	uint8_t reserved_c[4];
 	/** MAC address */
 	struct google_mac mac;
+	/** Number of device options */
+	uint16_t opt_count;
+	/** Total length (including this header) */
+	uint16_t len;
 	/** Reserved */
-	uint8_t reserved_d[10];
+	uint8_t reserved_d[6];
+	/** Space for options
+	 *
+	 * There is no specified upper limit, and no negotiation
+	 * mechanism for the amount of space required.  We allow space
+	 * for seems like a reasonable number of options.
+	 */
+	uint8_t opts[216];
 } __attribute__ (( packed ));
+
+/** Device option header */
+struct gve_option {
+	/** Option ID */
+	uint16_t id;
+	/** Length (excluding this header) */
+	uint16_t len;
+	/** Required feature mask
+	 *
+	 * The purpose of this field is remarkably unclear.  The Linux
+	 * kernel driver does define enum gve_dev_opt_req_feat_mask,
+	 * but every member of this enum has a zero value.
+	 */
+	uint32_t required;
+} __attribute__ (( packed ));
+
+/** In-order descriptor queues with raw DMA addressing */
+#define GVE_OPT_GQI_RDA 0x02
+
+/** In-order descriptor queues with queue page list addressing */
+#define GVE_OPT_GQI_QPL 0x03
+
+/** Out-of-order descriptor queues with raw DMA addressing */
+#define GVE_OPT_DQO_RDA 0x04
+
+/** Out-of-order descriptor queues with queue page list addressing */
+#define GVE_OPT_DQO_QPL 0x07
 
 /** Configure device resources command */
 #define GVE_ADMIN_CONFIGURE 0x0002
@@ -176,7 +215,16 @@ struct gve_admin_configure {
 	uint32_t num_irqs;
 	/** IRQ doorbell stride */
 	uint32_t irq_stride;
+	/** MSI-X base index */
+	uint32_t msix_base;
+	/** Descriptor queue format */
+	uint8_t format;
+	/** Reserved */
+	uint8_t reserved[7];
 } __attribute__ (( packed ));
+
+/** Descriptor queue format */
+#define GVE_FORMAT( mode ) ( (mode) + 1 )
 
 /** Register page list command */
 #define GVE_ADMIN_REGISTER 0x0003
@@ -231,6 +279,14 @@ struct gve_admin_create_tx {
 	uint32_t qpl_id;
 	/** Notification channel ID */
 	uint32_t notify_id;
+	/** Completion ring address */
+	uint64_t cmplt;
+	/** Number of descriptor ring entries */
+	uint16_t desc_count;
+	/** Number of completion ring entries */
+	uint16_t cmplt_count;
+	/** Reserved */
+	uint8_t reserved_b[4];
 } __attribute__ (( packed ));
 
 /** Create receive queue command */
@@ -256,10 +312,14 @@ struct gve_admin_create_rx {
 	uint64_t desc;
 	/** Queue page list ID */
 	uint32_t qpl_id;
-	/** Reserved */
-	uint8_t reserved_b[2];
+	/** Number of descriptor ring entries */
+	uint16_t desc_count;
 	/** Packet buffer size */
 	uint16_t bufsz;
+	/** Number of completion ring entries */
+	uint16_t cmplt_count;
+	/** Reserved */
+	uint8_t reserved[6];
 } __attribute__ (( packed ));
 
 /** Destroy transmit queue command */
@@ -384,8 +444,11 @@ struct gve_irqs {
 	volatile uint32_t *db[GVE_IRQ_COUNT];
 };
 
-/** Disable interrupts */
-#define GVE_IRQ_DISABLE 0x40000000UL
+/** Disable in-order queue interrupt */
+#define GVE_GQI_IRQ_DISABLE 0x40000000UL
+
+/** Rearm out-of-order queue interrupt */
+#define GVE_DQO_IRQ_REARM 0x00000019UL
 
 /**
  * Queue resources
@@ -465,7 +528,18 @@ struct gve_qpl {
 	unsigned int count;
 	/** Queue page list ID */
 	unsigned int id;
+	/** Queue page list base device address
+	 *
+	 * This will be zero in the GQI-QPL operating mode, or the DMA
+	 * address of the first page in any other operating mode.
+	 * (Despite its name, DQO-QPL still requires the use of raw
+	 * DMA addresses in transmit and receive descriptors.)
+	 */
+	physaddr_t base;
 };
+
+/** Raw DMA addressing queue page list ID */
+#define GVE_RAW_QPL 0xffffffff
 
 /**
  * Maximum number of transmit buffers
@@ -486,8 +560,8 @@ struct gve_buffer {
 	uint64_t addr;
 } __attribute__ (( packed ));
 
-/** A transmit packet descriptor */
-struct gve_tx_packet {
+/** An in-order transmit descriptor */
+struct gve_gqi_tx_descriptor {
 	/** Type */
 	uint8_t type;
 	/** Reserved */
@@ -498,21 +572,71 @@ struct gve_tx_packet {
 	uint16_t total;
 	/** Length of this descriptor */
 	uint16_t len;
-} __attribute__ (( packed ));
-
-/** A transmit descriptor */
-struct gve_tx_descriptor {
-	/** Packet descriptor */
-	struct gve_tx_packet pkt;
 	/** Buffer descriptor */
 	struct gve_buffer buf;
 } __attribute__ (( packed ));
 
 /** Start of packet transmit descriptor type */
-#define GVE_TX_TYPE_START 0x00
+#define GVE_GQI_TX_TYPE_START 0x00
 
 /** Continuation of packet transmit descriptor type */
-#define GVE_TX_TYPE_CONT 0x20
+#define GVE_GQI_TX_TYPE_CONT 0x20
+
+/** An out-of-order transmit tag
+ *
+ * From the hardware perspective, this is an opaque 15-bit (sic) value
+ * that is simply copied from the descriptor to the corresponding
+ * completion.
+ */
+struct gve_dqo_tx_tag {
+	/** Buffer index within queue page list */
+	uint8_t id;
+	/** Number of descriptors covered by this completion
+	 *
+	 * Note that this is a 7-bit quantity: the high bit may be
+	 * (ab)used by the hardware to indicate that a completion is a
+	 * terminologically undefined "miss" completion.
+	 */
+	int8_t count;
+} __attribute__ (( packed ));
+
+/** An out-of-order transmit descriptor */
+struct gve_dqo_tx_descriptor {
+	/** Buffer descriptor */
+	struct gve_buffer buf;
+	/** Descriptor type and flags */
+	uint8_t type;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Tag */
+	struct gve_dqo_tx_tag tag;
+	/** Length of this descriptor */
+	uint16_t len;
+} __attribute__ (( packed ));
+
+/** Normal packet transmit descriptor type */
+#define GVE_DQO_TX_TYPE_PACKET 0x0c
+
+/** Last transmit descriptor in a packet */
+#define GVE_DQO_TX_TYPE_LAST 0x20
+
+/** An out-of-order transmit completion */
+struct gve_dqo_tx_completion {
+	/** Reserved */
+	uint8_t reserved_a[1];
+	/** Completion flags */
+	uint8_t flags;
+	/** Tag */
+	struct gve_dqo_tx_tag tag;
+	/** Reserved */
+	uint8_t reserved_b[4];
+} __attribute__ (( packed ));
+
+/** Transmit completion packet flag */
+#define GVE_DQO_TXF_PKT 0x10
+
+/** Transmit completion generation flag */
+#define GVE_DQO_TXF_GEN 0x80
 
 /**
  * Maximum number of receive buffers
@@ -529,14 +653,25 @@ struct gve_tx_descriptor {
 /** Receive queue interrupt channel */
 #define GVE_RX_IRQ 1
 
-/** A receive descriptor */
-struct gve_rx_descriptor {
+/** An in-order receive descriptor */
+struct gve_gqi_rx_descriptor {
 	/** Buffer descriptor */
 	struct gve_buffer buf;
 } __attribute__ (( packed ));
 
-/** A receive packet descriptor */
-struct gve_rx_packet {
+/** Receive error */
+#define GVE_GQI_RXF_ERROR 0x08
+
+/** Receive packet continues into next descriptor */
+#define GVE_GQI_RXF_MORE 0x20
+
+/** Receive sequence number mask */
+#define GVE_GQI_RX_SEQ_MASK 0x07
+
+/** An in-order receive completion descriptor */
+struct gve_gqi_rx_completion {
+	/** Reserved */
+	uint8_t reserved[60];
 	/** Length */
 	uint16_t len;
 	/** Flags */
@@ -545,41 +680,95 @@ struct gve_rx_packet {
 	uint8_t seq;
 } __attribute__ (( packed ));
 
-/** Receive error */
-#define GVE_RXF_ERROR 0x08
+/** Padding at the start of all received packets */
+#define GVE_GQI_RX_PAD 2
 
-/** Receive packet continues into next descriptor */
-#define GVE_RXF_MORE 0x20
-
-/** Receive sequence number mask */
-#define GVE_RX_SEQ_MASK 0x07
-
-/** A receive completion descriptor */
-struct gve_rx_completion {
+/** An out-of-order receive descriptor */
+struct gve_dqo_rx_descriptor {
+	/** Tag */
+	uint8_t tag;
 	/** Reserved */
-	uint8_t reserved[60];
-	/** Packet descriptor */
-	struct gve_rx_packet pkt;
+	uint8_t reserved_a[7];
+	/** Buffer descriptor */
+	struct gve_buffer buf;
+	/** Reserved */
+	uint8_t reserved_b[16];
 } __attribute__ (( packed ));
 
-/** Padding at the start of all received packets */
-#define GVE_RX_PAD 2
+/** An out-of-order receive completion */
+struct gve_dqo_rx_completion {
+	/** Reserved */
+	uint8_t reserved_a[1];
+	/** Status */
+	uint8_t status;
+	/** Reserved */
+	uint8_t reserved_b[2];
+	/** Length and generation bit */
+	uint16_t len;
+	/** Reserved */
+	uint8_t reserved_c[2];
+	/** Flags */
+	uint8_t flags;
+	/** Reserved */
+	uint8_t reserved_d[3];
+	/** Tag */
+	uint8_t tag;
+	/** Reserved */
+	uint8_t reserved_e[19];
+} __attribute__ (( packed ));
+
+/** Receive error */
+#define GVE_DQO_RXS_ERROR 0x04
+
+/** Receive completion generation flag */
+#define GVE_DQO_RXL_GEN 0x4000
+
+/** Last receive descriptor in a packet */
+#define GVE_DQO_RXF_LAST 0x02
+
+/** Queue strides */
+struct gve_queue_stride {
+	/** Descriptor ring stride */
+	uint8_t desc;
+	/** Completion ring stride */
+	uint8_t cmplt;
+};
 
 /** A descriptor queue */
 struct gve_queue {
 	/** Descriptor ring */
 	union {
 		/** Transmit descriptors */
-		struct gve_tx_descriptor *tx;
+		union {
+			/** In-order transmit descriptors */
+			struct gve_gqi_tx_descriptor *gqi;
+			/** Out-of-order transmit descriptors */
+			struct gve_dqo_tx_descriptor *dqo;
+		} tx;
 		/** Receive descriptors */
-		struct gve_rx_descriptor *rx;
+		union {
+			/** In-order receive descriptors */
+			struct gve_gqi_rx_descriptor *gqi;
+			/** Out-of-order receive descriptors */
+			struct gve_dqo_rx_descriptor *dqo;
+		} rx;
 		/** Raw data */
 		void *raw;
 	} desc;
 	/** Completion ring */
 	union {
+		/** Transmit completions */
+		union {
+			/** Out-of-order transmit completions */
+			struct gve_dqo_tx_completion *dqo;
+		} tx;
 		/** Receive completions */
-		struct gve_rx_completion *rx;
+		union {
+			/** In-order receive completions */
+			struct gve_gqi_rx_completion *gqi;
+			/** Out-of-order receive completions */
+			struct gve_dqo_rx_completion *dqo;
+		} rx;
 		/** Raw data */
 		void *raw;
 	} cmplt;
@@ -588,6 +777,8 @@ struct gve_queue {
 
 	/** Queue type */
 	const struct gve_queue_type *type;
+	/** Queue strides */
+	struct gve_queue_stride stride;
 	/** Number of descriptors (must be a power of two) */
 	unsigned int count;
 	/** Maximum fill level (must be a power of two) */
@@ -609,6 +800,10 @@ struct gve_queue {
 	uint32_t prod;
 	/** Consumer counter */
 	uint32_t cons;
+	/** Completion counter */
+	uint32_t done;
+	/** Tag ring */
+	uint8_t *tag;
 
 	/** Queue page list */
 	struct gve_qpl qpl;
@@ -622,9 +817,10 @@ struct gve_queue_type {
 	 * Populate command parameters to create queue
 	 *
 	 * @v queue		Descriptor queue
+	 * @v qpl		Queue page list ID
 	 * @v cmd		Admin queue command
 	 */
-	void ( * param ) ( struct gve_queue *queue,
+	void ( * param ) ( struct gve_queue *queue, uint32_t qpl,
 			   union gve_admin_command *cmd );
 	/** Queue page list ID */
 	uint32_t qpl;
@@ -632,10 +828,13 @@ struct gve_queue_type {
 	uint8_t irq;
 	/** Maximum fill level */
 	uint8_t fill;
-	/** Descriptor size */
-	uint8_t desc_len;
-	/** Completion size */
-	uint8_t cmplt_len;
+	/** Queue strides */
+	struct {
+		/** In-order queue strides */
+		struct gve_queue_stride gqi;
+		/** Out-of-order queue strides */
+		struct gve_queue_stride dqo;
+	} stride;
 	/** Command to create queue */
 	uint8_t create;
 	/** Command to destroy queue */
@@ -654,6 +853,8 @@ struct gve_nic {
 	struct net_device *netdev;
 	/** DMA device */
 	struct dma_device *dma;
+	/** Dummy MSI-X interrupt */
+	struct pci_msix msix;
 
 	/** Admin queue */
 	struct gve_admin admin;
@@ -663,13 +864,23 @@ struct gve_nic {
 	struct gve_events events;
 	/** Scratch buffer */
 	struct gve_scratch scratch;
+	/** Supported options */
+	uint32_t options;
+	/** Operating mode */
+	unsigned int mode;
 
 	/** Transmit queue */
 	struct gve_queue tx;
 	/** Receive queue */
 	struct gve_queue rx;
-	/** Transmit I/O buffers */
+	/** Transmit I/O buffers (indexed by tag) */
 	struct io_buffer *tx_iobuf[GVE_TX_FILL];
+	/** Transmit tag chain */
+	uint8_t tx_chain[GVE_TX_FILL];
+	/** Transmit tag ring */
+	uint8_t tx_tag[GVE_TX_FILL];
+	/** Receive tag ring */
+	uint8_t rx_tag[GVE_RX_FILL];
 	/** Receive sequence number */
 	unsigned int seq;
 
@@ -682,6 +893,15 @@ struct gve_nic {
 	/** Reset recovery recorded activity counter */
 	uint32_t activity;
 };
+
+/** Operating mode
+ *
+ * These values are chosen to allow for easy transformation to a queue
+ * format identifier as used for the "Configure device resources"
+ * command.
+ */
+#define GVE_MODE_QPL 0x01		/**< Use registered queue pages */
+#define GVE_MODE_DQO 0x02		/**< Use out-of-order queues */
 
 /** Maximum time to wait for admin queue commands */
 #define GVE_ADMIN_MAX_WAIT_MS 500
