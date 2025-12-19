@@ -613,13 +613,15 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 
 	/* Connect/disconnect driver from all handles */
 	for ( i = 0 ; i < num_handles ; i++ ) {
+		printf ( "Processing handle %lld/%lld: %s\n",
+			 ( unsigned long long ) i, ( unsigned long long ) num_handles,
+			 efi_handle_name ( handles[i] ) );
 		if ( ( rc = method ( handles[i] ) ) != 0 ) {
 			/* Ignore errors and continue to process
 			 * remaining handles.
 			 */
-		}
-		if ( i % 10 == 0 ) {
-			printf ( "Processed %lld/%lld handles\n", ( unsigned long long ) i, ( unsigned long long ) num_handles );
+			printf ( "Error processing handle %lld: %s\n",
+				 ( unsigned long long ) i, strerror ( rc ) );
 		}
 	}
 
