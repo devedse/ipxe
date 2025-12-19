@@ -24,6 +24,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <ipxe/timer.h>
 #include <ipxe/image.h>
@@ -206,6 +207,7 @@ int efi_autoexec_load ( void ) {
 
 		DBGC ( device, "EFI %s loaded %s (%zd bytes)\n",
 		       efi_handle_name ( device ), image->name, image->len );
+		printf ( "EFI loaded %s (%zd bytes)\n", image->name, image->len );
 		return 0;
 	}
 

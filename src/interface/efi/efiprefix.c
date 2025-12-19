@@ -20,6 +20,7 @@
 FILE_LICENCE ( GPL2_OR_LATER );
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <ipxe/device.h>
 #include <ipxe/uri.h>
@@ -117,15 +118,23 @@ struct init_fn efi_init_application_fn __init_fn ( INIT_NORMAL ) = {
  * @v rootdev		EFI root device
  */
 static int efi_probe ( struct root_device *rootdev __unused ) {
+	int rc;
 
 	/* Try loading autoexec script */
+	printf ( "Loading autoexec script...\n" );
 	efi_autoexec_load();
+	printf ( "Autoexec script loaded (or not found)\n" );
 
 	/* Remove any vetoed drivers */
+	printf ( "Vetoing drivers...\n" );
 	efi_veto();
+	printf ( "Drivers vetoed\n" );
 
 	/* Connect our drivers */
-	return efi_driver_connect_all();
+	printf ( "Connecting drivers...\n" );
+	rc = efi_driver_connect_all();
+	printf ( "Drivers connected: %d\n", rc );
+	return rc;
 }
 
 /**
