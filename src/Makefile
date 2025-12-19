@@ -11,7 +11,7 @@ HOST_CFLAGS	:=
 MAKEDEPS	:= Makefile
 CROSS_COMPILE	?= $(CROSS)
 SYMBOL_PREFIX	:=
-DEBUG		:= efi_autoexec,script
+DEBUG		:= efi_autoexec,script,efi_driver,efi_pci,snp,snponly,mnp,nii
 
 ###############################################################################
 #
