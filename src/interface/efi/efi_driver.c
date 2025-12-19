@@ -278,7 +278,7 @@ efi_driver_start ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
  err_disconnecting:
 	efi_restore_tpl ( &tpl );
  err_already_started:
-	printf ( "DEBUG: efi_driver_start failed with status %lx\n", efirc );
+	printf ( "DEBUG: efi_driver_start failed with status %lx\n", ( unsigned long ) efirc );
 	return efirc;
 }
 
