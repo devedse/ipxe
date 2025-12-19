@@ -131,7 +131,7 @@ static int efi_probe ( struct root_device *rootdev __unused ) {
 	printf ( "Drivers vetoed\n" );
 
 	/* Connect our drivers */
-	printf ( "Connecting drivers...\n" );
+	printf ( "Connecting drivers (efi_driver_connect_all)...\n" );
 	rc = efi_driver_connect_all();
 	printf ( "Drivers connected: %d\n", rc );
 	return rc;

@@ -168,6 +168,7 @@ int monojob_wait ( const char *string, unsigned long timeout ) {
 		} else {
 			printf ( " ok\n" );
 		}
+		printf ( "Monojob finished with rc=%d\n", rc );
 	}
 
 	return rc;
