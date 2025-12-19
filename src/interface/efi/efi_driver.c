@@ -619,7 +619,7 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 			 */
 		}
 		if ( i % 10 == 0 ) {
-			printf ( "Processed %d/%d handles\n", i, num_handles );
+			printf ( "Processed %lld/%lld handles\n", ( unsigned long long ) i, ( unsigned long long ) num_handles );
 		}
 	}
 
