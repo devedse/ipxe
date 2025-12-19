@@ -491,12 +491,16 @@ static int atl_probe ( struct pci_device *pci ) {
 	int rc = ENOERR;
 	uint32_t io_size = 0;
 
+	printf ( "DEBUG: atl_probe entered for %04x:%04x\n", pci->vendor, pci->device );
+
 	/* Allocate and initialise net device */
 	netdev = alloc_etherdev ( sizeof( *nic ) );
 	if ( !netdev ) {
+		printf ( "DEBUG: alloc_etherdev failed\n" );
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
+	printf ( "DEBUG: alloc_etherdev success\n" );
 	netdev_init ( netdev, &atl_operations );
 	nic = netdev->priv;
 	pci_set_drvdata ( pci, netdev );
@@ -506,6 +510,7 @@ static int atl_probe ( struct pci_device *pci ) {
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
+	printf ( "DEBUG: adjust_pci_device done\n" );
 
 	switch ( nic->flags ) {
 		case ATL_FLAG_A1:
@@ -524,28 +529,43 @@ static int atl_probe ( struct pci_device *pci ) {
 	/* Map registers */
 	nic->regs = pci_ioremap ( pci, pci->membase, io_size );
 	if ( !nic->regs ) {
+		printf ( "DEBUG: pci_ioremap failed\n" );
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+	printf ( "DEBUG: pci_ioremap success\n" );
 
 	 /* Configure DMA */
 	nic->dma = &pci->dma;
 
 	/* Reset the NIC */
-	if ( ( rc = nic->hw_ops->reset ( nic ) ) != 0 )
+	printf ( "DEBUG: calling reset\n" );
+	if ( ( rc = nic->hw_ops->reset ( nic ) ) != 0 ) {
+		printf ( "DEBUG: reset failed\n" );
 		goto err_reset;
+	}
+	printf ( "DEBUG: reset success\n" );
 
 	/* Get MAC Address */
-	if ( ( rc = nic->hw_ops->get_mac ( nic, netdev->hw_addr ) ) != 0 )
+	printf ( "DEBUG: calling get_mac\n" );
+	if ( ( rc = nic->hw_ops->get_mac ( nic, netdev->hw_addr ) ) != 0 ) {
+		printf ( "DEBUG: get_mac failed\n" );
 		goto err_mac;
+	}
+	printf ( "DEBUG: get_mac success\n" );
 
 	/* Register network device */
-	if ( ( rc = register_netdev ( netdev ) ) != 0 )
+	printf ( "DEBUG: calling register_netdev\n" );
+	if ( ( rc = register_netdev ( netdev ) ) != 0 ) {
+		printf ( "DEBUG: register_netdev failed\n" );
 		goto err_register_netdev;
+	}
+	printf ( "DEBUG: register_netdev success\n" );
 
 	/* Set initial link state */
 	netdev_link_down ( netdev );
 
+	printf ( "DEBUG: atl_probe finished\n" );
 	return 0;
 
 err_register_netdev:

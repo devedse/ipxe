@@ -31,6 +31,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <errno.h>
 #include <string.h>
+#include <stdio.h>
 #include <ipxe/efi/efi.h>
 
 /* Disambiguate the various error causes */
@@ -66,9 +67,11 @@ int efi_connect ( EFI_HANDLE device, EFI_HANDLE driver ) {
 	DBGC ( device, "%s driver at %s TPL\n",
 	       ( driver ? efi_handle_name ( driver ) : "any" ),
 	       efi_tpl_name ( efi_external_tpl ) );
+	printf ( "DEBUG: About to call ConnectController for %s\n", efi_handle_name ( device ) );
 	bs->RestoreTPL ( efi_external_tpl );
 	efirc = bs->ConnectController ( device, drivers, NULL, TRUE );
 	bs->RaiseTPL ( efi_internal_tpl );
+	printf ( "DEBUG: Returned from ConnectController for %s\n", efi_handle_name ( device ) );
 	if ( efirc != 0 ) {
 		rc = -EEFI_CONNECT ( efirc );
 		DBGC ( device, "EFI %s could not connect: %s\n",
