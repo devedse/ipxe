@@ -23,6 +23,7 @@
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
+#include <stdio.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
 #include "snpnet.h"
@@ -43,6 +44,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static int snp_supported ( EFI_HANDLE device ) {
 	EFI_GUID *protocol = &efi_simple_network_protocol_guid;
 
+	printf ( "DEBUG: snp_supported entered for %s\n", efi_handle_name ( device ) );
 	return snpnet_supported ( device, protocol, 1 );
 }
 
@@ -55,6 +57,7 @@ static int snp_supported ( EFI_HANDLE device ) {
 static int nii_supported ( EFI_HANDLE device ) {
 	EFI_GUID *protocol = &efi_nii31_protocol_guid;
 
+	printf ( "DEBUG: nii_supported entered for %s\n", efi_handle_name ( device ) );
 	return snpnet_supported ( device, protocol, 1 );
 }
 

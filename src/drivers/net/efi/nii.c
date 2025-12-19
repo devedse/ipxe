@@ -23,6 +23,7 @@
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>
@@ -1288,6 +1289,8 @@ int nii_start ( struct efi_device *efidev ) {
 	struct net_device *netdev;
 	struct nii_nic *nii;
 	int rc;
+
+	printf ( "DEBUG: nii_start entered for %s\n", efi_handle_name ( device ) );
 
 	/* Allocate and initialise structure */
 	netdev = alloc_netdev ( sizeof ( *nii ) );

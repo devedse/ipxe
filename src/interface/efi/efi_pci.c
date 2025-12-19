@@ -773,9 +773,13 @@ static int efipci_supported ( EFI_HANDLE device ) {
 	uint8_t hdrtype;
 	int rc;
 
+	printf ( "DEBUG: efipci_supported entered for %s\n", efi_handle_name ( device ) );
+
 	/* Get PCI device information */
-	if ( ( rc = efipci_info ( device, &efipci ) ) != 0 )
+	if ( ( rc = efipci_info ( device, &efipci ) ) != 0 ) {
+		printf ( "DEBUG: efipci_info failed for %s: %s\n", efi_handle_name ( device ), strerror ( rc ) );
 		return rc;
+	}
 
 	/* Do not attempt to drive bridges */
 	hdrtype = efipci.pci.hdrtype;
@@ -783,6 +787,7 @@ static int efipci_supported ( EFI_HANDLE device ) {
 		DBGC ( device, "EFIPCI " PCI_FMT " type %02x is not type %02x\n",
 		       PCI_ARGS ( &efipci.pci ), hdrtype,
 		       PCI_HEADER_TYPE_NORMAL );
+		printf ( "DEBUG: efipci_supported: not a normal device\n" );
 		return -ENOTTY;
 	}
 
@@ -792,11 +797,13 @@ static int efipci_supported ( EFI_HANDLE device ) {
 		       "has no driver\n", PCI_ARGS ( &efipci.pci ),
 		       efipci.pci.vendor, efipci.pci.device,
 		       efipci.pci.class );
+		printf ( "DEBUG: efipci_supported: no driver found for %04x:%04x\n", efipci.pci.vendor, efipci.pci.device );
 		return rc;
 	}
 	DBGC ( device, "EFIPCI " PCI_FMT " (%04x:%04x class %06x) has driver "
 	       "\"%s\"\n", PCI_ARGS ( &efipci.pci ), efipci.pci.vendor,
 	       efipci.pci.device, efipci.pci.class, efipci.pci.id->name );
+	printf ( "DEBUG: efipci_supported: found driver %s for %04x:%04x\n", efipci.pci.id->name, efipci.pci.vendor, efipci.pci.device );
 
 	return 0;
 }
@@ -831,6 +838,8 @@ static int efipci_start ( struct efi_device *efidev ) {
 	EFI_HANDLE device = efidev->device;
 	struct efi_pci_device *efipci;
 	int rc;
+
+	printf ( "DEBUG: efipci_start entered for %s\n", efi_handle_name ( device ) );
 
 	/* Allocate PCI device */
 	efipci = zalloc ( sizeof ( *efipci ) );

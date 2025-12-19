@@ -375,6 +375,8 @@ int mnpnet_start ( struct efi_device *efidev ) {
 	EFI_STATUS efirc;
 	int rc;
 
+	printf ( "DEBUG: mnpnet_start entered for %s\n", efi_handle_name ( device ) );
+
 	/* Allocate and initalise structure */
 	netdev = alloc_etherdev ( sizeof ( *mnp ) );
 	if ( ! netdev ) {

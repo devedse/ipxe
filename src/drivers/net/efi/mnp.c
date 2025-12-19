@@ -29,6 +29,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
+#include <stdio.h>
 #include <errno.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
@@ -44,6 +45,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static int mnp_supported ( EFI_HANDLE device ) {
 	EFI_GUID *binding = &efi_managed_network_service_binding_protocol_guid;
 
+	printf ( "DEBUG: mnp_supported entered for %s\n", efi_handle_name ( device ) );
 	return snpnet_supported ( device, binding, 0 );
 }
 

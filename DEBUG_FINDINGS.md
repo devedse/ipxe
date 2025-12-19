@@ -48,8 +48,14 @@ EFIDRV PciRoot(0x0)/Pci(0x2,0x1)/Pci(0x0,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0) has driv
 EFIDRV PciRoot(0x0)/Pci(0x2,0x1)/Pci(0x0,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0) DRIVER_START
 EFIDRV PciRoot(0x0)/Pci(0x2,0x1)/Pci(0x0,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0) refusing to start during disconnection
 EFIDRV PciRoot(0x0)/Pci(0x2,0x1)/Pci(0x0,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0) connecting new drivers
+DEBUG: About to call ConnectController for PciRoot(0x0)/Pci(0x2,0x1)/Pci(0x0,0x0)/Pci(0x0,0x0)/Pci(0x0,0x0)
 [HANGS HERE]
 ```
+
+### Analysis
+- The hang occurs **inside** the `bs->ConnectController` call in `efi_connect.c`.
+- The `atl_probe` function in `aqc1xx.c` is **never reached** (no "DEBUG: atl_probe entered" message).
+- This indicates the issue lies within the firmware's `ConnectController` implementation or in the early stages of iPXE's EFI driver binding callbacks (`efi_driver_supported` or `efi_driver_start`) before the specific hardware driver is invoked.
 
 ## Related GitHub Discussion
 
