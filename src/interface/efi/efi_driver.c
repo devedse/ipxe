@@ -529,21 +529,14 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 		     ( efipci.pci.device == 0x00c0 || efipci.pci.device == 0x94c0 ||
 		       efipci.pci.device == 0x93c0 || efipci.pci.device == 0x04c0 ||
 		       efipci.pci.device == 0x14c0 || efipci.pci.device == 0x12c0 ) ) {
-			DBGC ( device, "EFIDRV %s detected as AQC113, skipping disconnect/connect cycle\n",
+			DBGC ( device, "EFIDRV %s detected as AQC113, will disconnect then start directly\n",
 			       efi_handle_name ( device ) );
-			/* For AQC113, skip entire disconnect/connect cycle and just start driver directly */
-			if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
-							  NULL ) ) != 0 ) {
-				rc = -EEFI ( efirc );
-				DBGC ( device, "EFIDRV %s could not start driver "
-				       "directly: %s\n", efi_handle_name ( device ),
-				       strerror ( rc ) );
-				return rc;
-			}
-			return 0;
+			/* For AQC113, disconnect existing drivers but skip ConnectController */
+			goto aqc113_disconnect;
 		}
 	}
 
+aqc113_disconnect:
 	/* Disconnect any existing drivers */
 	DBGC2 ( device, "EFIDRV %s before disconnecting:\n",
 		efi_handle_name ( device ) );
@@ -567,6 +560,29 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 	DBGC2 ( device, "EFIDRV %s after disconnecting:\n",
 		efi_handle_name ( device ) );
 	DBGC2_EFI_PROTOCOLS ( device, device );
+
+	/* For AQC113, skip ConnectController and start driver directly */
+	if ( efipci_info ( device, &efipci ) == 0 ) {
+		if ( efipci.pci.vendor == 0x1d6a && 
+		     ( efipci.pci.device == 0x00c0 || efipci.pci.device == 0x94c0 ||
+		       efipci.pci.device == 0x93c0 || efipci.pci.device == 0x04c0 ||
+		       efipci.pci.device == 0x14c0 || efipci.pci.device == 0x12c0 ) ) {
+			DBGC ( device, "EFIDRV %s AQC113: starting driver directly (skip ConnectController)\n",
+			       efi_handle_name ( device ) );
+			if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
+							  NULL ) ) != 0 ) {
+				rc = -EEFI ( efirc );
+				DBGC ( device, "EFIDRV %s could not start driver "
+				       "directly: %s\n", efi_handle_name ( device ),
+				       strerror ( rc ) );
+				return rc;
+			}
+			DBGC2 ( device, "EFIDRV %s after connecting:\n",
+				efi_handle_name ( device ) );
+			DBGC2_EFI_PROTOCOLS ( device, device );
+			return 0;
+		}
+	}
 
 	/* Connect our driver */
 	DBGC ( device, "EFIDRV %s connecting new drivers\n",
