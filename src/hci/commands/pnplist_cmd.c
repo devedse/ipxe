@@ -26,6 +26,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <getopt.h>
 #include <ipxe/netdevice.h>
 #include <ipxe/pci.h>
 #include <ipxe/command.h>
@@ -335,7 +337,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 	/* Store output to variable if requested */
 	if ( opts.store ) {
 		printf ( "DEBUG: Storing %zu bytes to variable '%s'\n", total_used, opts.store );
-		rc = store_setting ( NULL, opts.store, output, total_used );
+		rc = storef_setting ( NULL, opts.store, output );
 		if ( rc != 0 ) {
 			printf ( "Could not store to variable \"%s\": %s\n",
 				 opts.store, strerror ( rc ) );
