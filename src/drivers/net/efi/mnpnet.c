@@ -30,7 +30,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 #include <string.h>
-#include <stdio.h>
 #include <errno.h>
 #include <ipxe/iobuf.h>
 #include <ipxe/netdevice.h>
@@ -375,8 +374,6 @@ int mnpnet_start ( struct efi_device *efidev ) {
 	struct mnp_nic *mnp;
 	EFI_STATUS efirc;
 	int rc;
-
-	printf ( "DEBUG: mnpnet_start entered for %s\n", efi_handle_name ( device ) );
 
 	/* Allocate and initalise structure */
 	netdev = alloc_etherdev ( sizeof ( *mnp ) );

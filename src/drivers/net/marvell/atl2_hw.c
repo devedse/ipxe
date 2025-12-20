@@ -72,8 +72,6 @@ int atl2_hw_finish_ack_ ( struct atl_nic *nic, uint32_t ms ) {
 	uint32_t i;
 	int err = 0;
 
-	printf ( "DEBUG: atl2_hw_finish_ack_ entered, ms=%d\n", ms );
-
 	ATL_WRITE_REG ( ATL_READ_REG ( ATL2_HOST_FINISHED_WRITE )
 	| 1, ATL2_HOST_FINISHED_WRITE );
 
@@ -85,9 +83,7 @@ int atl2_hw_finish_ack_ ( struct atl_nic *nic, uint32_t ms ) {
 		}
 		udelay ( ATL2_DELAY_100 );
 	}
-	printf ( "DEBUG: atl2_hw_finish_ack_ loop finished, i=%d\n", i );
 	if (i == ( ms / 100 ) ) {
-		printf ( "DEBUG: atl2_hw_finish_ack_ timed out\n" );
 		err = -ETIME;
 	}
 
@@ -98,34 +94,18 @@ int atl2_hw_fw_init_ ( struct atl_nic *nic ) {
 	uint32_t val;
 	int err = 0;
 
-	printf ( "DEBUG: atl2_hw_fw_init_ entered\n" );
-
-	printf ( "DEBUG: Reading LINK_CTRL_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_LINK_CTRL_IN_OFF, &val, 1 );
-	printf ( "DEBUG: LINK_CTRL_IN_OFF read complete, val=0x%x\n", val );
 	val |= ( ATL2_HOST_MODE_ACTIVE | ( 1U << 13 ) );
-	printf ( "DEBUG: Writing LINK_CTRL_IN_OFF with val=0x%x...\n", val );
 	atl2_hw_write_shared_in_ ( nic, ATL2_LINK_CTRL_IN_OFF, &val, 1 );
-	printf ( "DEBUG: LINK_CTRL_IN_OFF write complete\n" );
 
-	printf ( "DEBUG: Reading MTU_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_MTU_IN_OFF, &val, 1 );
-	printf ( "DEBUG: MTU_IN_OFF read complete, val=0x%x\n", val );
 	val = 16352;
-	printf ( "DEBUG: Writing MTU_IN_OFF with val=%d...\n", val );
 	atl2_hw_write_shared_in_ ( nic, ATL2_MTU_IN_OFF, &val, 1 );
-	printf ( "DEBUG: MTU_IN_OFF write complete\n" );
 
-	printf ( "DEBUG: Reading LINK_OPTS_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
-	printf ( "DEBUG: LINK_OPTS_IN_OFF read complete, val=0x%x\n", val );
 	val = 0;
-	printf ( "DEBUG: Writing LINK_OPTS_IN_OFF with val=0...\n" );
 	atl2_hw_write_shared_in_( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
-	printf ( "DEBUG: LINK_OPTS_IN_OFF write complete\n" );
-	printf ( "DEBUG: About to call atl2_hw_finish_ack_ with 5000ms timeout...\n" );
 	err = atl2_hw_finish_ack_ ( nic, 5000 );
-	printf ( "DEBUG: atl2_hw_finish_ack_ returned %d\n", err );
 
 	return err;
 }
@@ -137,12 +117,9 @@ int atl2_hw_reset ( struct atl_nic *nic ) {
 	int err = 0;
 	int i;
 
-	printf ( "DEBUG: atl2_hw_reset entered\n" );
-
 	request = ATL2_RESET_STATUS_REQ_GSR;
 
 	ATL_WRITE_REG ( request, ATL2_GLB_RST_CTRL2 );
-	printf ( "DEBUG: ATL2_GLB_RST_CTRL2 written\n" );
 
 	/* Wait for boot code started every 10us, 200 ms */
 	for ( i = 0; i < 20000; ++i )
@@ -155,10 +132,8 @@ int atl2_hw_reset ( struct atl_nic *nic ) {
 
 		udelay ( ATL2_DELAY_10 );
 	}
-	printf ( "DEBUG: Boot code wait loop finished, i=%d\n", i );
 	if ( i == 20000 )
 	{
-		printf ( "DEBUG: Boot code hanged\n" );
 		DBGC ( nic, "Boot code hanged" );
 		err = -EIO;
 		goto err_exit;
@@ -173,23 +148,19 @@ int atl2_hw_reset ( struct atl_nic *nic ) {
 
 		udelay ( ATL2_DELAY_10 );
 	}
-	printf ( "DEBUG: Boot succeed wait loop finished, i=%d\n", i );
 
 	if ( !completed )
 	{
-		printf ( "DEBUG: FW Restart timed out\n" );
 		DBGC ( nic, "FW Restart timed out" );
 		err = -ETIME;
 		goto err_exit;
 	}
 
 	status = ATL_READ_REG ( ATL2_GLB_RST_CTRL2 );
-	printf ( "DEBUG: ATL2_GLB_RST_CTRL2 read: 0x%x\n", status );
 
 	if ( status & ATL2_RESET_STATUS_BOOT_FAILED_MASK )
 	{
 		err = -EIO;
-		printf ( "DEBUG: FW Restart failed\n" );
 		DBGC ( nic, "FW Restart failed" );
 		DBGC ( nic, "status = 0x%x", status );
 		goto err_exit;
@@ -199,14 +170,11 @@ int atl2_hw_reset ( struct atl_nic *nic ) {
 			& ATL2_FW_HOST_INTERRUPT_REQUEST_READY )
 	{
 		err = -ENOTSUP;
-		printf ( "DEBUG: Dynamic FW load not implemented\n" );
 		DBGC ( nic, "Dynamic FW load not implemented" );
 		goto err_exit;
 	}
 
-	printf ( "DEBUG: calling atl2_hw_fw_init_\n" );
 	err = atl2_hw_fw_init_ ( nic );
-	printf ( "DEBUG: atl2_hw_fw_init_ returned %d\n", err );
 
 err_exit:
 	return err;

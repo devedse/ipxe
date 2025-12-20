@@ -24,7 +24,6 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <string.h>
-#include <stdio.h>
 #include <errno.h>
 #include <ipxe/bofm.h>
 #include <ipxe/efi/efi.h>
@@ -174,8 +173,6 @@ static int efi_bofm_supported ( EFI_HANDLE device ) {
 	EFI_STATUS efirc;
 	int rc;
 
-	printf ( "DEBUG: efi_bofm_supported entered for %s\n", efi_handle_name ( device ) );
-
 	/* Get PCI device information */
 	if ( ( rc = efipci_info ( device, &efipci ) ) != 0 )
 		return rc;
@@ -221,8 +218,6 @@ static int efi_bofm_supported ( EFI_HANDLE device ) {
 static int efi_bofm_start ( struct efi_device *efidev ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_HANDLE device = efidev->device;
-
-	printf ( "DEBUG: efi_bofm_start entered for %s\n", efi_handle_name ( device ) );
 	union {
 		IBM_BOFM_DRIVER_CONFIGURATION_PROTOCOL *bofm1;
 		void *interface;

@@ -157,8 +157,6 @@ efi_driver_supported ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 	unsigned int count;
 	int rc;
 
-	printf ( "DEBUG: efi_driver_supported entered for %s\n", efi_handle_name ( device ) );
-
 	DBGCP ( device, "EFIDRV %s DRIVER_SUPPORTED",
 		efi_handle_name ( device ) );
 	if ( child )
@@ -175,11 +173,9 @@ efi_driver_supported ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 	/* Count drivers claiming to support this device */
 	count = 0;
 	for_each_table_entry ( efidrv, EFI_DRIVERS ) {
-		printf ( "DEBUG: checking support for driver %s\n", efidrv->name );
 		if ( ( rc = efidrv->supported ( device ) ) == 0 ) {
 			DBGC ( device, "EFIDRV %s has driver \"%s\"\n",
 			       efi_handle_name ( device ), efidrv->name );
-			printf ( "DEBUG: driver %s supports device\n", efidrv->name );
 			count++;
 		}
 	}
@@ -188,11 +184,9 @@ efi_driver_supported ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 	if ( ! count ) {
 		DBGCP ( device, "EFIDRV %s has no driver\n",
 			efi_handle_name ( device ) );
-		printf ( "DEBUG: no driver found for %s\n", efi_handle_name ( device ) );
 		return EFI_UNSUPPORTED;
 	}
 
-	printf ( "DEBUG: efi_driver_supported success for %s\n", efi_handle_name ( device ) );
 	return 0;
 }
 
@@ -212,8 +206,6 @@ efi_driver_start ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 	struct efi_saved_tpl tpl;
 	EFI_STATUS efirc;
 	int rc;
-
-	printf ( "DEBUG: efi_driver_start entered for %s\n", efi_handle_name ( device ) );
 
 	DBGC ( device, "EFIDRV %s DRIVER_START", efi_handle_name ( device ) );
 	if ( child )
@@ -249,7 +241,6 @@ efi_driver_start ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 
 	/* Try to start this device */
 	for_each_table_entry ( efidrv, EFI_DRIVERS ) {
-		printf ( "DEBUG: checking start for driver %s\n", efidrv->name );
 		if ( ( rc = efidrv->supported ( device ) ) != 0 ) {
 			DBGC ( device, "EFIDRV %s is not supported by driver "
 			       "\"%s\": %s\n", efi_handle_name ( device ),
@@ -257,17 +248,14 @@ efi_driver_start ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
 			       strerror ( rc ) );
 			continue;
 		}
-		printf ( "DEBUG: attempting to start driver %s\n", efidrv->name );
 		if ( ( rc = efidrv->start ( efidev ) ) == 0 ) {
 			efidev->driver = efidrv;
 			DBGC ( device, "EFIDRV %s using driver \"%s\"\n",
 			       efi_handle_name ( device ),
 			       efidev->driver->name );
 			efi_restore_tpl ( &tpl );
-			printf ( "DEBUG: efi_driver_start success with driver %s\n", efidrv->name );
 			return 0;
 		}
-		printf ( "DEBUG: failed to start driver %s: %s\n", efidrv->name, strerror ( rc ) );
 		DBGC ( device, "EFIDRV %s could not start driver \"%s\": %s\n",
 		       efi_handle_name ( device ), efidrv->name,
 		       strerror ( rc ) );
@@ -279,7 +267,6 @@ efi_driver_start ( EFI_DRIVER_BINDING_PROTOCOL *driver __unused,
  err_disconnecting:
 	efi_restore_tpl ( &tpl );
  err_already_started:
-	printf ( "DEBUG: efi_driver_start failed with status %lx\n", ( unsigned long ) efirc );
 	return efirc;
 }
 
@@ -667,15 +654,10 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 
 	/* Connect/disconnect driver from all handles */
 	for ( i = 0 ; i < num_handles ; i++ ) {
-		printf ( "Processing handle %lld/%lld: %s\n",
-			 ( unsigned long long ) i, ( unsigned long long ) num_handles,
-			 efi_handle_name ( handles[i] ) );
 		if ( ( rc = method ( handles[i] ) ) != 0 ) {
 			/* Ignore errors and continue to process
 			 * remaining handles.
 			 */
-			printf ( "Error processing handle %lld: %s\n",
-				 ( unsigned long long ) i, strerror ( rc ) );
 		}
 	}
 
@@ -695,7 +677,6 @@ static int efi_driver_handles ( int ( * method ) ( EFI_HANDLE handle ) ) {
 int efi_driver_connect_all ( void ) {
 
 	DBGC ( &efi_driver_binding, "EFIDRV connecting our drivers\n" );
-	printf ( "EFIDRV connecting our drivers\n" );
 	return efi_driver_handles ( efi_driver_connect );
 }
 

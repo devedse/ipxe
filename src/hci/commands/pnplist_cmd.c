@@ -84,12 +84,9 @@ static struct pci_device * try_efi_pci_access ( struct net_device *netdev, int *
 	EFI_HANDLE device_handle;
 	int rc;
 
-	printf ( "DEBUG: Attempting EFI PCI I/O protocol access\n" );
-
 	/* Find SNP device for this network device */
 	snpdev = find_snpdev_by_netdev ( netdev );
 	if ( snpdev ) {
-		printf ( "DEBUG: Found SNP device for netdev\n" );
 		
 		/* Get the EFI device handle - this should be the PCI device */
 		device_handle = snpdev->handle;
@@ -97,14 +94,11 @@ static struct pci_device * try_efi_pci_access ( struct net_device *netdev, int *
 		/* Try to open PCI I/O protocol on the EFI device handle */
 		efipci = malloc ( sizeof ( *efipci ) );
 		if ( ! efipci ) {
-			printf ( "DEBUG: Failed to allocate EFI PCI device\n" );
 			return NULL;
 		}
 
 		rc = efipci_info ( device_handle, efipci );
 		if ( rc == 0 ) {
-			printf ( "DEBUG: Successfully accessed EFI PCI I/O: vendor=0x%04x device=0x%04x\n",
-				 efipci->pci.vendor, efipci->pci.device );
 			
 			/* Allocate a regular PCI device structure and copy the information */
 			pci = malloc ( sizeof ( *pci ) );
@@ -115,19 +109,12 @@ static struct pci_device * try_efi_pci_access ( struct net_device *netdev, int *
 				return pci;
 			}
 		} else {
-			printf ( "DEBUG: Failed to get EFI PCI info: rc=%d\n", rc );
-		}
-		
-		free ( efipci );
+			free ( efipci );
 	} else {
-		printf ( "DEBUG: No SNP device found for netdev\n" );
-	}
-	
-	printf ( "DEBUG: EFI PCI I/O protocol access failed\n" );
+		*need_free = 0;
 #else
 	/* Suppress unused parameter warning on non-EFI platforms */
 	( void ) netdev;
-	printf ( "DEBUG: Not an EFI platform\n" );
 #endif
 	*need_free = 0;
 	return NULL;
@@ -154,8 +141,6 @@ static struct pci_device * get_real_pci_device ( struct net_device *netdev, int 
 	/* First, try EFI PCI I/O protocol access to bypass SNP abstraction */
 	pci = try_efi_pci_access ( netdev, need_free );
 	if ( pci ) {
-		printf ( "DEBUG: Got real PCI device via EFI: vendor=0x%04x device=0x%04x\n",
-			 pci->vendor, pci->device );
 		return pci;
 	}
 	
@@ -163,18 +148,13 @@ static struct pci_device * get_real_pci_device ( struct net_device *netdev, int 
 	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
 		pci = container_of ( dev, struct pci_device, dev );
 		
-		printf ( "DEBUG: Direct PCI access - vendor=0x%04x device=0x%04x\n", 
-			 pci->vendor, pci->device );
-		
 		/* Check if we have abstracted device information */
 		if ( is_snp_abstracted ( pci->vendor, pci->device ) ) {
-			printf ( "DEBUG: Detected SNP abstraction but EFI access failed\n" );
 		}
 		
 		return pci;
 	}
-	
-	printf ( "DEBUG: Non-PCI device and EFI access failed\n" );
+
 	return NULL;
 }
 
@@ -196,9 +176,6 @@ static int pnplist_show_device ( struct net_device *netdev ) {
 	if ( ! pci ) {
 		return 0; /* Skip devices we can't identify */
 	}
-
-	printf ( "DEBUG: Using PCI device vendor=0x%04x device=0x%04x (need_free=%d)\n", 
-		 pci->vendor, pci->device, need_free );
 
 	/* Try to read subsystem vendor ID */
 	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
