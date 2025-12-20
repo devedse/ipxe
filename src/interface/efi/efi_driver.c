@@ -32,6 +32,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/efi/efi_strings.h>
 #include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_driver.h>
+#include <ipxe/efi/efi_pci.h>
 
 /** @file
  *
@@ -509,16 +510,31 @@ int efi_driver_exclude ( EFI_HANDLE device, EFI_GUID *protocol ) {
  * @ret rc		Return status code
  */
 static int efi_driver_connect ( EFI_HANDLE device ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_HANDLE driver = efi_driver_binding.DriverBindingHandle;
 	struct efi_driver *efidrv;
+	struct efi_pci_device efipci;
 	EFI_STATUS efirc;
 	int rc;
+	int is_aqc113 = 0;
 
 	/* Check if we want to drive this device */
 	if ( ( efirc = efi_driver_supported ( &efi_driver_binding, device,
 					      NULL ) ) != 0 ) {
 		/* Not supported; not an error */
 		return 0;
+	}
+
+	/* Check if this is an AQC113 device that needs workaround */
+	if ( efipci_info ( device, &efipci ) == 0 ) {
+		if ( efipci.pci.vendor == 0x1d6a && 
+		     ( efipci.pci.device == 0x00c0 || efipci.pci.device == 0x94c0 ||
+		       efipci.pci.device == 0x93c0 || efipci.pci.device == 0x04c0 ||
+		       efipci.pci.device == 0x14c0 || efipci.pci.device == 0x12c0 ) ) {
+			is_aqc113 = 1;
+			DBGC ( device, "EFIDRV %s detected as AQC113, will use direct driver start\n",
+			       efi_handle_name ( device ) );
+		}
 	}
 
 	/* Disconnect any existing drivers */
@@ -548,14 +564,26 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 	/* Connect our driver */
 	DBGC ( device, "EFIDRV %s connecting new drivers\n",
 	       efi_handle_name ( device ) );
-	if ( ( rc = efi_connect ( device, driver ) ) != 0 ) {
+	
+	/* For AQC113 devices, skip ConnectController and call driver directly
+	 * to avoid firmware hang in ConnectController when native driver conflicts */
+	if ( is_aqc113 ) {
+		DBGC ( device, "EFIDRV %s using direct driver start for AQC113\n",
+		       efi_handle_name ( device ) );
+		if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
+						  NULL ) ) != 0 ) {
+			rc = -EEFI ( efirc );
+			DBGC ( device, "EFIDRV %s could not start driver "
+			       "directly: %s\n", efi_handle_name ( device ),
+			       strerror ( rc ) );
+			return rc;
+		}
+	} else if ( ( rc = efi_connect ( device, driver ) ) != 0 ) {
 		DBGC ( device, "EFIDRV %s could not connect new drivers: "
 		       "%s\n", efi_handle_name ( device ), strerror ( rc ) );
 		DBGC ( device, "EFIDRV %s connecting driver directly\n",
 		       efi_handle_name ( device ) );
-		/* Try connecting directly if ConnectController failed or hung? 
-		   Wait, if ConnectController hung, we never get here. 
-		   But if it failed, we try direct start. */
+		/* Try connecting directly if ConnectController failed */
 		if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
 						  NULL ) ) != 0 ) {
 			rc = -EEFI ( efirc );
