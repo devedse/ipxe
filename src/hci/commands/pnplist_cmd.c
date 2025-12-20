@@ -23,6 +23,10 @@
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
+#include <ipxe/errfile.h>
+
+ERRFILE ( ERRFILE_pnplist_cmd );
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -336,8 +340,20 @@ static int pnplist_exec ( int argc, char **argv ) {
 
 	/* Store output to variable if requested */
 	if ( opts.store ) {
+		struct named_setting setting;
 		printf ( "DEBUG: Storing %zu bytes to variable '%s'\n", total_used, opts.store );
-		rc = storef_setting ( NULL, opts.store, output );
+		/* Parse setting name */
+		if ( ( rc = parse_autovivified_setting ( opts.store, &setting ) ) != 0 ) {
+			printf ( "Could not parse setting name \"%s\": %s\n",
+				 opts.store, strerror ( rc ) );
+			free ( output );
+			return rc;
+		}
+		/* Apply default type if necessary */
+		if ( ! setting.setting.type )
+			setting.setting.type = &setting_type_string;
+		/* Store setting */
+		rc = storef_setting ( setting.settings, &setting.setting, output );
 		if ( rc != 0 ) {
 			printf ( "Could not store to variable \"%s\": %s\n",
 				 opts.store, strerror ( rc ) );
