@@ -100,18 +100,31 @@ int atl2_hw_fw_init_ ( struct atl_nic *nic ) {
 
 	printf ( "DEBUG: atl2_hw_fw_init_ entered\n" );
 
+	printf ( "DEBUG: Reading LINK_CTRL_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_LINK_CTRL_IN_OFF, &val, 1 );
+	printf ( "DEBUG: LINK_CTRL_IN_OFF read complete, val=0x%x\n", val );
 	val |= ( ATL2_HOST_MODE_ACTIVE | ( 1U << 13 ) );
+	printf ( "DEBUG: Writing LINK_CTRL_IN_OFF with val=0x%x...\n", val );
 	atl2_hw_write_shared_in_ ( nic, ATL2_LINK_CTRL_IN_OFF, &val, 1 );
+	printf ( "DEBUG: LINK_CTRL_IN_OFF write complete\n" );
 
+	printf ( "DEBUG: Reading MTU_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_MTU_IN_OFF, &val, 1 );
+	printf ( "DEBUG: MTU_IN_OFF read complete, val=0x%x\n", val );
 	val = 16352;
+	printf ( "DEBUG: Writing MTU_IN_OFF with val=%d...\n", val );
 	atl2_hw_write_shared_in_ ( nic, ATL2_MTU_IN_OFF, &val, 1 );
+	printf ( "DEBUG: MTU_IN_OFF write complete\n" );
 
+	printf ( "DEBUG: Reading LINK_OPTS_IN_OFF...\n" );
 	atl2_hw_read_shared_in_ ( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
+	printf ( "DEBUG: LINK_OPTS_IN_OFF read complete, val=0x%x\n", val );
 	val = 0;
+	printf ( "DEBUG: Writing LINK_OPTS_IN_OFF with val=0...\n" );
 	atl2_hw_write_shared_in_( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
-	err = atl2_hw_finish_ack_ ( nic, 50000000 );
+	printf ( "DEBUG: LINK_OPTS_IN_OFF write complete\n" );
+	printf ( "DEBUG: About to call atl2_hw_finish_ack_ with 5000ms timeout...\n" );
+	err = atl2_hw_finish_ack_ ( nic, 5000 );
 	printf ( "DEBUG: atl2_hw_finish_ack_ returned %d\n", err );
 
 	return err;

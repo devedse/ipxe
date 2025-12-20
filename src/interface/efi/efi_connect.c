@@ -68,13 +68,44 @@ int efi_connect ( EFI_HANDLE device, EFI_HANDLE driver ) {
 	       ( driver ? efi_handle_name ( driver ) : "any" ),
 	       efi_tpl_name ( efi_external_tpl ) );
 	printf ( "DEBUG: About to call ConnectController for %s\n", efi_handle_name ( device ) );
+
+	/* DEBUG: List all drivers that support this device */
+	{
+		EFI_HANDLE *handles;
+		UINTN num_handles;
+		UINTN i;
+		EFI_DRIVER_BINDING_PROTOCOL *drv;
+		EFI_COMPONENT_NAME2_PROTOCOL *name2;
+		CHAR16 *driver_name;
+		EFI_STATUS status;
+		
+		printf("DEBUG: Checking candidate drivers for %s...\n", efi_handle_name(device));
+		if (bs->LocateHandleBuffer(ByProtocol, &efi_driver_binding_protocol_guid, NULL, &num_handles, &handles) == 0) {
+			for (i = 0; i < num_handles; i++) {
+				status = bs->OpenProtocol(handles[i], &efi_driver_binding_protocol_guid, (void **)&drv, efi_image_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+				if (status == 0) {
+					if (drv->Supported(drv, device, NULL) == 0) {
+						driver_name = NULL;
+						status = bs->OpenProtocol(drv->ImageHandle, &efi_component_name2_protocol_guid, (void **)&name2, efi_image_handle, NULL, EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+						if (status == 0) {
+							name2->GetDriverName(name2, "en", &driver_name);
+						}
+						printf("DEBUG: Driver %p (%ls) supports this device\n", handles[i], driver_name ? driver_name : L"<unknown>");
+					}
+				}
+			}
+			bs->FreePool(handles);
+		}
+		printf("DEBUG: Candidate check complete.\n");
+	}
+
 	bs->RestoreTPL ( efi_external_tpl );
 	/* Try recursive=FALSE to avoid connecting other drivers? 
 	   But we want to connect OUR driver. 
 	   If we pass 'drivers' list, it should prioritize us. 
 	   If we pass Recursive=FALSE, it might not connect children? 
 	   But we are connecting the controller itself. */
-	efirc = bs->ConnectController ( device, drivers, NULL, FALSE );
+	efirc = bs->ConnectController ( device, drivers, NULL, TRUE );
 	bs->RaiseTPL ( efi_internal_tpl );
 	printf ( "DEBUG: Returned from ConnectController for %s\n", efi_handle_name ( device ) );
 	if ( efirc != 0 ) {
