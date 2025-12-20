@@ -33,6 +33,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <string.h>
 #include <stdio.h>
 #include <ipxe/efi/efi.h>
+#include <ipxe/efi/Protocol/DriverBinding.h>
+#include <ipxe/efi/Protocol/ComponentName2.h>
 
 /* Disambiguate the various error causes */
 #define EINFO_EEFI_CONNECT						\
