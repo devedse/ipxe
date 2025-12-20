@@ -510,7 +510,6 @@ int efi_driver_exclude ( EFI_HANDLE device, EFI_GUID *protocol ) {
  * @ret rc		Return status code
  */
 static int efi_driver_connect ( EFI_HANDLE device ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_HANDLE driver = efi_driver_binding.DriverBindingHandle;
 	struct efi_driver *efidrv;
 	struct efi_pci_device efipci;
