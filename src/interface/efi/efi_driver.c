@@ -531,8 +531,18 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 		       efipci.pci.device == 0x93c0 || efipci.pci.device == 0x04c0 ||
 		       efipci.pci.device == 0x14c0 || efipci.pci.device == 0x12c0 ) ) {
 			is_aqc113 = 1;
-			DBGC ( device, "EFIDRV %s detected as AQC113, will use direct driver start\n",
+			DBGC ( device, "EFIDRV %s detected as AQC113, skipping disconnect/connect cycle\n",
 			       efi_handle_name ( device ) );
+			/* For AQC113, skip entire disconnect/connect cycle and just start driver directly */
+			if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
+							  NULL ) ) != 0 ) {
+				rc = -EEFI ( efirc );
+				DBGC ( device, "EFIDRV %s could not start driver "
+				       "directly: %s\n", efi_handle_name ( device ),
+				       strerror ( rc ) );
+				return rc;
+			}
+			return 0;
 		}
 	}
 
@@ -564,20 +574,7 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 	DBGC ( device, "EFIDRV %s connecting new drivers\n",
 	       efi_handle_name ( device ) );
 	
-	/* For AQC113 devices, skip ConnectController and call driver directly
-	 * to avoid firmware hang in ConnectController when native driver conflicts */
-	if ( is_aqc113 ) {
-		DBGC ( device, "EFIDRV %s using direct driver start for AQC113\n",
-		       efi_handle_name ( device ) );
-		if ( ( efirc = efi_driver_start ( &efi_driver_binding, device,
-						  NULL ) ) != 0 ) {
-			rc = -EEFI ( efirc );
-			DBGC ( device, "EFIDRV %s could not start driver "
-			       "directly: %s\n", efi_handle_name ( device ),
-			       strerror ( rc ) );
-			return rc;
-		}
-	} else if ( ( rc = efi_connect ( device, driver ) ) != 0 ) {
+	if ( ( rc = efi_connect ( device, driver ) ) != 0 ) {
 		DBGC ( device, "EFIDRV %s could not connect new drivers: "
 		       "%s\n", efi_handle_name ( device ), strerror ( rc ) );
 		DBGC ( device, "EFIDRV %s connecting driver directly\n",
