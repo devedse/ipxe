@@ -515,7 +515,6 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 	struct efi_pci_device efipci;
 	EFI_STATUS efirc;
 	int rc;
-	int is_aqc113 = 0;
 
 	/* Check if we want to drive this device */
 	if ( ( efirc = efi_driver_supported ( &efi_driver_binding, device,
@@ -530,7 +529,6 @@ static int efi_driver_connect ( EFI_HANDLE device ) {
 		     ( efipci.pci.device == 0x00c0 || efipci.pci.device == 0x94c0 ||
 		       efipci.pci.device == 0x93c0 || efipci.pci.device == 0x04c0 ||
 		       efipci.pci.device == 0x14c0 || efipci.pci.device == 0x12c0 ) ) {
-			is_aqc113 = 1;
 			DBGC ( device, "EFIDRV %s detected as AQC113, skipping disconnect/connect cycle\n",
 			       efi_handle_name ( device ) );
 			/* For AQC113, skip entire disconnect/connect cycle and just start driver directly */
