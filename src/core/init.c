@@ -26,7 +26,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/device.h>
 #include <ipxe/console.h>
 #include <ipxe/init.h>
-#include <stdio.h>
 
 /** @file
  *
@@ -78,7 +77,6 @@ void startup ( void ) {
 		if ( startup_fn->startup ) {
 			DBGC ( colour, "INIT startup %s...\n",
 			       startup_fn->name );
-			printf ( "INIT startup %s...\n", startup_fn->name );
 			startup_fn->startup();
 		}
 	}

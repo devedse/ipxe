@@ -774,9 +774,8 @@ static int efipci_supported ( EFI_HANDLE device ) {
 	int rc;
 
 	/* Get PCI device information */
-	if ( ( rc = efipci_info ( device, &efipci ) ) != 0 ) {
+	if ( ( rc = efipci_info ( device, &efipci ) ) != 0 )
 		return rc;
-	}
 
 	/* Do not attempt to drive bridges */
 	hdrtype = efipci.pci.hdrtype;

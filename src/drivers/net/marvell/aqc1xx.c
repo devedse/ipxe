@@ -532,19 +532,16 @@ static int atl_probe ( struct pci_device *pci ) {
 	nic->dma = &pci->dma;
 
 	/* Reset the NIC */
-	if ( ( rc = nic->hw_ops->reset ( nic ) ) != 0 ) {
+	if ( ( rc = nic->hw_ops->reset ( nic ) ) != 0 )
 		goto err_reset;
-	}
 
 	/* Get MAC Address */
-	if ( ( rc = nic->hw_ops->get_mac ( nic, netdev->hw_addr ) ) != 0 ) {
+	if ( ( rc = nic->hw_ops->get_mac ( nic, netdev->hw_addr ) ) != 0 )
 		goto err_mac;
-	}
 
 	/* Register network device */
-	if ( ( rc = register_netdev ( netdev ) ) != 0 ) {
+	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
-	}
 
 	/* Set initial link state */
 	netdev_link_down ( netdev );

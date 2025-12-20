@@ -83,9 +83,8 @@ int atl2_hw_finish_ack_ ( struct atl_nic *nic, uint32_t ms ) {
 		}
 		udelay ( ATL2_DELAY_100 );
 	}
-	if (i == ( ms / 100 ) ) {
+	if (i == ( ms / 100 ) )
 		err = -ETIME;
-	}
 
 	return err;
 }
@@ -105,7 +104,7 @@ int atl2_hw_fw_init_ ( struct atl_nic *nic ) {
 	atl2_hw_read_shared_in_ ( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
 	val = 0;
 	atl2_hw_write_shared_in_( nic, ATL2_LINK_OPTS_IN_OFF, &val, 1 );
-	err = atl2_hw_finish_ack_ ( nic, 5000 );
+	err = atl2_hw_finish_ack_ ( nic, 50000000 );
 
 	return err;
 }
