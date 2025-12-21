@@ -2111,6 +2111,22 @@ struct efi_snp_device * find_snpdev ( EFI_HANDLE handle ) {
 }
 
 /**
+ * Find SNP device by network device
+ *
+ * @v netdev		Network device
+ * @ret snpdev		SNP device, or NULL
+ */
+struct efi_snp_device * find_snpdev_by_netdev ( struct net_device *netdev ) {
+	struct efi_snp_device *snpdev;
+
+	list_for_each_entry ( snpdev, &efi_snp_devices, list ) {
+		if ( snpdev->netdev == netdev )
+			return snpdev;
+	}
+	return NULL;
+}
+
+/**
  * Get most recently opened SNP device
  *
  * @ret snpdev		Most recently opened SNP device, or NULL
