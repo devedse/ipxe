@@ -125,9 +125,11 @@ static struct pci_device * try_efi_pci_access ( struct net_device *netdev, int *
 		} else {
 			printf ( "DEBUG: Failed to get PCI device via EFI PCI I/O protocol\n" );
 			free ( efipci );
+		}
 	} else {
 		printf ( "DEBUG: SNP device not found for netdev\n" );
 		*need_free = 0;
+	}
 #else
 	/* Suppress unused parameter warning on non-EFI platforms */
 	( void ) netdev;
