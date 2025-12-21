@@ -339,7 +339,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 	/* Store output to variable if requested */
 	if ( opts.store ) {
 		struct named_setting setting;
-		printf ( "DEBUG: Storing %zu bytes to variable '%s'\n", total_used, opts.store );
+		printf ( "DEBUG: Storing %d bytes to variable '%s'\n", ( int ) total_used, opts.store );
 		/* Parse setting name */
 		if ( ( rc = parse_autovivified_setting ( opts.store, &setting ) ) != 0 ) {
 			printf ( "Could not parse setting name \"%s\": %s\n",
