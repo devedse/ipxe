@@ -189,10 +189,11 @@ static struct pci_device * get_real_pci_device ( struct net_device *netdev, int 
  * @v netdev		Network device
  * @v buffer		Output buffer (or NULL to print to console)
  * @v len		Buffer length
- * @ret used		Number of bytes used in buffer
+ * @v used		Number of bytes used in buffer
+ * @v store		Output in storage format (URL-encoded query string)
  * @ret rc		Return status code
  */
-static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t len, size_t *used ) {
+static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t len, size_t *used, int store ) {
 	struct pci_device *pci;
 	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
 	uint8_t revision = 0x00;
@@ -239,11 +240,28 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 		printf ( "DEBUG: Using fallback subsystem IDs (invalid subsystem)\n" );
 		/* No valid subsystem ID - use vendor and device ID as fallback */
 		if ( buffer ) {
-			n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-				       "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
-				       pci->vendor, pci->device, pci->device, pci->vendor,
-				       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-				       PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+			if ( store ) {
+				/* URL-encoded query string format */
+				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+					       "%s_pnp=PCI%%5CVEN_%04X%%26DEV_%04X%%26SUBSYS_%04X%04X%%26REV_%02X%%5C%X%%26%X%%26%X%%26%X"
+					       "&%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
+					       netdev->name,
+					       pci->vendor, pci->device, pci->device, pci->vendor,
+					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn,
+					       netdev->name, pci->vendor,
+					       netdev->name, pci->device,
+					       netdev->name, pci->vendor, /* Fallback */
+					       netdev->name, pci->device, /* Fallback */
+					       netdev->name, revision,
+					       netdev->name, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+			} else {
+				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+					       "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+					       pci->vendor, pci->device, pci->device, pci->vendor,
+					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+			}
 			if ( n > 0 )
 				pos += n;
 		} else {
@@ -256,11 +274,28 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 		printf ( "DEBUG: Using actual subsystem IDs\n" );
 		/* Use actual subsystem IDs */
 		if ( buffer ) {
-			n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-				       "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
-				       pci->vendor, pci->device, subsys_device, subsys_vendor,
-				       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-				       PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+			if ( store ) {
+				/* URL-encoded query string format */
+				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+					       "%s_pnp=PCI%%5CVEN_%04X%%26DEV_%04X%%26SUBSYS_%04X%04X%%26REV_%02X%%5C%X%%26%X%%26%X%%26%X"
+					       "&%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
+					       netdev->name,
+					       pci->vendor, pci->device, subsys_device, subsys_vendor,
+					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn,
+					       netdev->name, pci->vendor,
+					       netdev->name, pci->device,
+					       netdev->name, subsys_vendor,
+					       netdev->name, subsys_device,
+					       netdev->name, revision,
+					       netdev->name, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+			} else {
+				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+					       "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+					       pci->vendor, pci->device, subsys_device, subsys_vendor,
+					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+			}
 			if ( n > 0 )
 				pos += n;
 		} else {
@@ -308,13 +343,15 @@ static int pnplist_exec ( int argc, char **argv ) {
 		if ( ! output )
 			return -ENOMEM;
 		output[0] = '\0';
+		total_used = 0;
 	}
 
+	int first = 1;
 	/* Iterate through all network devices */
 	for_each_netdev ( netdev ) {
 		if ( opts.store ) {
 			/* Check if we need more buffer space */
-			while ( total_used + 256 >= output_len ) {
+			while ( total_used + 512 >= output_len ) {
 				char *new_output;
 				output_len *= 2;
 				new_output = realloc ( output, output_len );
@@ -324,14 +361,21 @@ static int pnplist_exec ( int argc, char **argv ) {
 				}
 				output = new_output;
 			}
+
+			if ( ! first ) {
+				output[total_used++] = '&';
+				output[total_used] = '\0';
+			}
+
 			if ( ( rc = pnplist_show_device ( netdev, output + total_used,
-							  output_len - total_used, &used ) ) != 0 ) {
+							  output_len - total_used, &used, 1 ) ) != 0 ) {
 				free ( output );
 				return rc;
 			}
 			total_used += used;
+			first = 0;
 		} else {
-			if ( ( rc = pnplist_show_device ( netdev, NULL, 0, &used ) ) != 0 )
+			if ( ( rc = pnplist_show_device ( netdev, NULL, 0, &used, 0 ) ) != 0 )
 				return rc;
 		}
 	}
