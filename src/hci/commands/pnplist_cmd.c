@@ -243,12 +243,7 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 			if ( store ) {
 				/* URL-encoded query string format */
 				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-					       "%s_pnp=PCI%%5CVEN_%04X%%26DEV_%04X%%26SUBSYS_%04X%04X%%26REV_%02X%%5C%X%%26%X%%26%X%%26%X"
-					       "&%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
-					       netdev->name,
-					       pci->vendor, pci->device, pci->device, pci->vendor,
-					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn,
+					       "%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
 					       netdev->name, pci->vendor,
 					       netdev->name, pci->device,
 					       netdev->name, pci->vendor, /* Fallback */
@@ -277,12 +272,7 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 			if ( store ) {
 				/* URL-encoded query string format */
 				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-					       "%s_pnp=PCI%%5CVEN_%04X%%26DEV_%04X%%26SUBSYS_%04X%04X%%26REV_%02X%%5C%X%%26%X%%26%X%%26%X"
-					       "&%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
-					       netdev->name,
-					       pci->vendor, pci->device, subsys_device, subsys_vendor,
-					       revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-					       PCI_FUNC ( pci->busdevfn ), pci->busdevfn,
+					       "%s_ven=0x%04x&%s_dev=0x%04x&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x",
 					       netdev->name, pci->vendor,
 					       netdev->name, pci->device,
 					       netdev->name, subsys_vendor,
