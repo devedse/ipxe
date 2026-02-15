@@ -104,6 +104,8 @@ struct san_device {
 enum san_device_flags {
 	/** Device should not be included in description tables */
 	SAN_NO_DESCRIBE = 0x0001,
+	/** Force device to be treated as CD-ROM */
+	SAN_FORCE_CDROM = 0x0002,
 };
 
 /** SAN boot configuration parameters */

@@ -762,7 +762,8 @@ static void sandev_undescribe ( struct san_device *sandev ) {
  * substantial learning effort on the user.  Instead, we check for the
  * presence of the ISO9660 primary volume descriptor and, if found,
  * then we force a block size of 2048 and map read/write requests
- * appropriately.
+ * appropriately. The SAN_FORCE_CDROM flag can also be used to force
+ * CD-ROM mode regardless of ISO9660 detection.
  */
 static int sandev_parse_iso9660 ( struct san_device *sandev ) {
 	static const struct iso9660_primary_descriptor_fixed primary_check = {
@@ -778,6 +779,28 @@ static int sandev_parse_iso9660 ( struct san_device *sandev ) {
 	unsigned int lba;
 	unsigned int count;
 	int rc;
+
+	/* Check if CD-ROM mode is being forced */
+	if ( sandev->flags & SAN_FORCE_CDROM ) {
+		/* Calculate required blocksize shift for CD-ROM access */
+		blksize = sandev->capacity.blksize;
+		blksize_shift = 0;
+		while ( blksize < ISO9660_BLKSIZE ) {
+			blksize <<= 1;
+			blksize_shift++;
+		}
+		if ( blksize > ISO9660_BLKSIZE ) {
+			DBGC ( sandev->drive, "SAN %#02x cannot be forced to "
+			       "CD-ROM mode (block size %d > %d)\n", 
+			       sandev->drive, blksize, ISO9660_BLKSIZE );
+			return -EINVAL;
+		}
+		DBGC ( sandev->drive, "SAN %#02x forced to CD-ROM mode\n", 
+		       sandev->drive );
+		sandev->blksize_shift = blksize_shift;
+		sandev->is_cdrom = 1;
+		return 0;
+	}
 
 	/* Calculate required blocksize shift for potential CD-ROM access */
 	blksize = sandev->capacity.blksize;
