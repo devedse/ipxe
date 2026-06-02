@@ -101,6 +101,19 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** Next capability */
 #define PCI_CAP_NEXT		0x01
 
+/** Start of PCI Express extended capability list */
+#define PCI_EXT_CAPABILITY_LIST	0x100
+
+/** PCI Express extended capability header fields */
+#define PCI_EXT_CAP_ID( hdr )	( (hdr) & 0xffff )
+#define PCI_EXT_CAP_VER( hdr )	( ( (hdr) >> 16 ) & 0xf )
+#define PCI_EXT_CAP_NEXT( hdr )	( ( (hdr) >> 20 ) & 0xffc )
+
+/** Device Serial Number extended capability */
+#define PCI_EXT_CAP_DSN		0x0003
+#define PCI_DSN_LOWER		0x04	/**< Lower 32 bits of serial number */
+#define PCI_DSN_UPPER		0x08	/**< Upper 32 bits of serial number */
+
 /** Power management control and status */
 #define PCI_PM_CTRL		0x04
 #define PCI_PM_CTRL_STATE_MASK		0x0003	/**< Current power state */
@@ -329,6 +342,7 @@ extern void pci_remove ( struct pci_device *pci );
 extern int pci_find_capability ( struct pci_device *pci, int capability );
 extern int pci_find_next_capability ( struct pci_device *pci,
 				      int pos, int capability );
+extern int pci_find_ext_capability ( struct pci_device *pci, int capability );
 extern void pci_reset ( struct pci_device *pci, unsigned int exp );
 
 /**

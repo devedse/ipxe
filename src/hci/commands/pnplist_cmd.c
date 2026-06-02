@@ -165,6 +165,12 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	int need_free = 0;
 	size_t pos = 0;
 	int n;
+	int dsn_pos = 0;
+	uint32_t dsn_lo = 0, dsn_hi = 0;
+	int dsn_present = 0;
+	char instance[24];
+
+	instance[0] = '\0';
 
 	printf ( "\nDEBUG: ==== Processing device '%s' ====\n", netdev->name );
 
@@ -222,6 +228,35 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	if ( rc != 0 ) {
 		revision = 0x00;
 	}
+
+	/* Try to read the PCI Express Device Serial Number (DSN).
+	 *
+	 * When present, Windows uses the DSN as the device instance ID
+	 * suffix, formatted as the upper dword followed by the lower
+	 * dword (each as 8 uppercase hex digits) followed by "00".  This
+	 * is the machine-specific value needed for offline driver
+	 * injection.  When the DSN is absent, Windows falls back to a
+	 * location-based instance ID that we cannot reconstruct here.
+	 */
+	dsn_pos = pci_find_ext_capability ( pci, PCI_EXT_CAP_DSN );
+	if ( dsn_pos ) {
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_LOWER ),
+					&dsn_lo );
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_UPPER ),
+					&dsn_hi );
+		/* Treat an all-zero or all-ones serial number as absent */
+		if ( ! ( ( ( dsn_lo == 0x00000000 ) &&
+			   ( dsn_hi == 0x00000000 ) ) ||
+			 ( ( dsn_lo == 0xffffffff ) &&
+			   ( dsn_hi == 0xffffffff ) ) ) ) {
+			dsn_present = 1;
+			snprintf ( instance, sizeof ( instance ),
+				   "%08X%08X00", dsn_hi, dsn_lo );
+		}
+	}
+	printf ( "DEBUG: DSN ext cap @0x%x present=%d hi=0x%08x lo=0x%08x "
+		 "instance=%s\n", dsn_pos, dsn_present, dsn_hi, dsn_lo,
+		 instance );
 
 	/* Display PNP device path in Windows format */
 	printf ( "DEBUG: Final values - vendor=0x%04x device=0x%04x subsys_vendor=0x%04x subsys_device=0x%04x rev=0x%02x\n", pci->vendor, pci->device, subsys_vendor, subsys_device, revision );
@@ -286,6 +321,23 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 		}
 	}
 
+	/* Append DSN / device instance ID fields to the stored output.
+	 * netN_instance is the ready-to-use Windows instance ID suffix
+	 * when a DSN is present; netN_dsn_present signals whether it is
+	 * valid (0 means Windows uses a location-based ID we cannot
+	 * reconstruct here).
+	 */
+	if ( buffer && store ) {
+		n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+			       "&%s_dsn_present=%d&%s_dsn_hi=%08X&%s_dsn_lo=%08X&%s_instance=%s",
+			       netdev->name, dsn_present,
+			       netdev->name, dsn_hi,
+			       netdev->name, dsn_lo,
+			       netdev->name, instance );
+		if ( n > 0 )
+			pos += n;
+	}
+
 	/* Free allocated PCI device structure if needed */
 	if ( need_free ) {
 		free ( pci );
@@ -332,7 +384,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 	for_each_netdev ( netdev ) {
 		if ( opts.store ) {
 			/* Check if we need more buffer space */
-			while ( total_used + 512 >= output_len ) {
+			while ( total_used + 768 >= output_len ) {
 				char *new_output;
 				output_len *= 2;
 				new_output = realloc ( output, output_len );
