@@ -112,7 +112,7 @@ int pci_find_ext_capability ( struct pci_device *pci, int cap ) {
 		return 0;
 
 	while ( ttl-- > 0 ) {
-		if ( PCI_EXT_CAP_ID ( header ) == cap )
+		if ( PCI_EXT_CAP_ID ( header ) == ( unsigned int ) cap )
 			return pos;
 		pos = PCI_EXT_CAP_NEXT ( header );
 		if ( pos < PCI_EXT_CAPABILITY_LIST )
