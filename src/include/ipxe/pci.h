@@ -94,6 +94,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define PCI_CAP_ID_PM			0x01	/**< Power management */
 #define PCI_CAP_ID_VPD			0x03	/**< Vital product data */
 #define PCI_CAP_ID_VNDR			0x09	/**< Vendor-specific */
+#define PCI_CAP_ID_SSVID		0x0d	/**< Subsystem ID and Subsystem Vendor ID (bridges) */
 #define PCI_CAP_ID_EXP			0x10	/**< PCI Express */
 #define PCI_CAP_ID_MSIX			0x11	/**< MSI-X */
 #define PCI_CAP_ID_EA			0x14	/**< Enhanced Allocation */
