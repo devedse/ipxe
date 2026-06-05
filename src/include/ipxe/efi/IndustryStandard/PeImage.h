@@ -16,10 +16,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __PE_IMAGE_H__
-#define __PE_IMAGE_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 //
 // PE32+ Subsystem type for EFI images
@@ -813,5 +813,3 @@ typedef union {
   EFI_TE_IMAGE_HEADER                *Te;
   EFI_IMAGE_OPTIONAL_HEADER_UNION    *Union;
 } EFI_IMAGE_OPTIONAL_HEADER_PTR_UNION;
-
-#endif

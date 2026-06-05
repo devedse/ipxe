@@ -22,7 +22,9 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
+#include <byteswap.h>
 #include <ipxe/rsa.h>
 #include <ipxe/sha512.h>
 #include <ipxe/asn1.h>
@@ -53,10 +55,26 @@ struct rsa_digestinfo_prefix rsa_sha512_prefix __rsa_digestinfo_prefix = {
 
 /** RSA with SHA-512 signature hash algorithm */
 struct tls_signature_hash_algorithm tls_rsa_sha512 __tls_sig_hash_algorithm = {
-	.code = {
-		.signature = TLS_RSA_ALGORITHM,
-		.hash = TLS_SHA512_ALGORITHM,
-	},
+	.code = htons ( TLS_RSA_SHA512_ALGORITHM ),
+	.algorithm = &rsa_encryption_algorithm,
 	.pubkey = &rsa_algorithm,
+	.digest = &sha512_algorithm,
+};
+
+/** RSA-PSS with rsaEncryption OID and SHA-512 signature hash algorithm */
+struct tls_signature_hash_algorithm
+tls_rsa_pss_rsae_sha512 __tls_sig_hash_algorithm = {
+	.code = htons ( TLS_RSA_PSS_RSAE_SHA512_ALGORITHM ),
+	.algorithm = &rsa_encryption_algorithm,
+	.pubkey = &rsa_pss_algorithm,
+	.digest = &sha512_algorithm,
+};
+
+/** RSA-PSS with RSASSA-PSS OID and SHA-512 signature hash algorithm */
+struct tls_signature_hash_algorithm
+tls_rsa_pss_pss_sha512 __tls_sig_hash_algorithm = {
+	.code = htons ( TLS_RSA_PSS_PSS_SHA512_ALGORITHM ),
+	.algorithm = &rsassa_pss_algorithm,
+	.pubkey = &rsa_pss_algorithm,
 	.digest = &sha512_algorithm,
 };

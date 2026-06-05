@@ -1,704 +1,597 @@
 /*
- * (c) Copyright 2010 Stefan Hajnoczi <stefanha@gmail.com>
+ * Copyright (C) 2026 Michael Brown <mbrown@fensystems.co.uk>.
  *
- * based on the Etherboot virtio-net driver
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
  *
- *  (c) Copyright 2008 Bull S.A.S.
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  *
- *  Author: Laurent Vivier <Laurent.Vivier@bull.net>
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
  *
- * some parts from Linux Virtio PCI driver
- *
- *  Copyright IBM Corp. 2007
- *  Authors: Anthony Liguori  <aliguori@us.ibm.com>
- *
- *  some parts from Linux Virtio Ring
- *
- *  Copyright Rusty Russell IBM Corporation 2007
- *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
+ * You can also choose to distribute this program under the terms of
+ * the Unmodified Binary Distribution Licence (as given in the file
+ * COPYING.UBDL), provided that you have satisfied its requirements.
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
-#include <errno.h>
-#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
 #include <unistd.h>
-#include <ipxe/list.h>
-#include <ipxe/iobuf.h>
+#include <errno.h>
+#include <byteswap.h>
 #include <ipxe/netdevice.h>
-#include <ipxe/pci.h>
-#include <ipxe/dma.h>
-#include <ipxe/if_ether.h>
 #include <ipxe/ethernet.h>
-#include <ipxe/virtio-pci.h>
-#include <ipxe/virtio-ring.h>
+#include <ipxe/if_ether.h>
+#include <ipxe/iobuf.h>
+#include <ipxe/malloc.h>
+#include <ipxe/pci.h>
 #include "virtio-net.h"
 
-/*
- * Virtio network device driver
+/** @file
  *
- * Specification:
- * http://ozlabs.org/~rusty/virtio-spec/
+ * Virtual I/O network device
  *
- * The virtio network device is supported by Linux virtualization software
- * including QEMU/KVM and lguest.  This driver supports the virtio over PCI
- * transport; virtual machines have one virtio-net PCI adapter per NIC.
- *
- * Virtio-net is different from hardware NICs because virtio devices
- * communicate with the hypervisor via virtqueues, not traditional descriptor
- * rings.  Virtqueues are unordered queues, they support add_buf() and
- * get_buf() operations.  To transmit a packet, the driver has to add the
- * packet buffer onto the virtqueue.  To receive a packet, the driver must
- * first add an empty buffer to the virtqueue and then get the filled packet
- * buffer on completion.
- *
- * Virtqueues are an abstraction that is commonly implemented using the vring
- * descriptor ring layout.  The vring is the actual shared memory structure
- * that allows the virtual machine to communicate buffers with the hypervisor.
- * Because the vring layout is optimized for flexibility and performance rather
- * than space, it is heavy-weight and allocated like traditional descriptor
- * rings in the open() function of the driver and not in probe().
- *
- * There is no true interrupt enable/disable.  Virtqueues have callback
- * enable/disable flags but these are only hints.  The hypervisor may still
- * raise an interrupt.  Nevertheless, this driver disables callbacks in the
- * hopes of avoiding interrupts.
  */
 
-/* Driver types are declared here so virtio-net.h can be easily synced with its
- * Linux source.
+/** Supported features */
+const struct virtio_features virtio_net_features = {
+	.word = {
+		( VIRTIO_FEAT0_ANY_LAYOUT |
+		  VIRTIO_FEAT0_NET_MTU |
+		  VIRTIO_FEAT0_NET_MAC ),
+		( VIRTIO_FEAT1_MODERN ),
+	},
+};
+
+/******************************************************************************
+ *
+ * Device-specific registers
+ *
+ ******************************************************************************
  */
 
-/* Virtqueue indices */
-enum {
-	RX_INDEX = 0,
-	TX_INDEX,
-	QUEUE_NB
-};
-
-/** Max number of pending rx packets */
-#define NUM_RX_BUF 8
-
-struct virtnet_nic {
-	/** Base pio register address */
-	unsigned long ioaddr;
-
-	/** 0 for legacy, 1 for virtio 1.0 */
-	int virtio_version;
-
-	/** Virtio 1.0 device data */
-	struct virtio_pci_modern_device vdev;
-
-	/** RX/TX virtqueues */
-	struct vring_virtqueue *virtqueue;
-
-	/** RX packets handed to the NIC waiting to be filled in */
-	struct list_head rx_iobufs;
-
-	/** Pending rx packet count */
-	unsigned int rx_num_iobufs;
-
-	/** DMA device */
-	struct dma_device *dma;
-
-};
-
-/** Add an iobuf to a virtqueue
+/**
+ * Get MAC address
  *
  * @v netdev		Network device
- * @v vq_idx		Virtqueue index (RX_INDEX or TX_INDEX)
+ */
+static void virtio_net_mac ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	uint32_t has_mac;
+	unsigned int i;
+
+	/* Read MAC address from device registers */
+	for ( i = 0 ; i < ETH_ALEN ; i++ ) {
+		netdev->hw_addr[i] = ioread8 ( virtio->device +
+					       VIRTIO_NET_MAC + i );
+	}
+
+	/* Use random MAC address if undefined or invalid */
+	has_mac = ( virtio->features.word[0] & VIRTIO_FEAT0_NET_MAC );
+	if ( ! ( has_mac && is_valid_ether_addr ( netdev->hw_addr ) ) ) {
+		DBGC ( vnet, "VNET %s has %s MAC address\n",
+		       virtio->name, ( has_mac ? "invalid" : "no" ) );
+		eth_random_addr ( netdev->hw_addr );
+	}
+}
+
+/**
+ * Get MTU
+ *
+ * @v netdev		Network device
+ */
+static void virtio_net_mtu ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	uint32_t has_mtu;
+
+	/* Read MTU from device registers, if available */
+	has_mtu = ( virtio->features.word[0] & VIRTIO_FEAT0_NET_MTU );
+	if ( has_mtu ) {
+		netdev->mtu = ioread16 ( virtio->device + VIRTIO_NET_MTU );
+		netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
+		DBGC ( vnet, "VNET %s has MTU %zd\n",
+		       virtio->name, netdev->mtu );
+	}
+}
+
+/******************************************************************************
+ *
+ * Queue management
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Enable queue
+ *
+ * @v vnet		Virtio network device
+ * @v queue		Virtio network queue
+ * @ret rc		Return status code
+ */
+static int virtio_net_enable ( struct virtio_net *vnet,
+			       struct virtio_net_queue *queue ) {
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_desc *desc;
+	unsigned int fill;
+	unsigned int slot;
+	unsigned int index;
+	unsigned int write;
+	int rc;
+
+	/* Map packet header */
+	if ( ( rc = dma_map ( virtio->dma, &queue->map, &queue->hdr,
+			      sizeof ( queue->hdr ), queue->dma ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s Q%d could not map header: %s\n",
+		       virtio->name, queue->queue.index, strerror ( rc ) );
+		goto err_map;
+	}
+
+	/* Enable queue */
+	if ( ( rc = virtio_enable ( virtio, &queue->queue,
+				    queue->count ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s Q%d could not initialise: %s\n",
+		       virtio->name, queue->queue.index, strerror ( rc ) );
+		goto err_enable;
+	}
+
+	/* Calculate mask */
+	fill = queue->queue.count;
+	if ( fill > queue->max )
+		fill = queue->max;
+	queue->fill = fill;
+	queue->mask = ( fill - 1 );
+
+	/* Initialise descriptors and slot ring */
+	write = queue->write;
+	for ( slot = 0 ; slot < fill ; slot++ ) {
+		queue->slots[slot] = slot;
+		queue->iobufs[slot] = NULL;
+		index = ( slot * VIRTIO_NET_DESCS );
+		desc = &queue->queue.desc[index];
+		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
+		desc[0].len = cpu_to_le32 ( vnet->hlen );
+		desc[0].flags = cpu_to_le16 ( VIRTIO_DESC_FL_NEXT | write );
+		desc[0].next = cpu_to_le16 ( index + 1 );
+		desc[1].flags = cpu_to_le16 ( write );
+	}
+
+	DBGC ( vnet, "VNET %s Q%d using %d/%d descriptors\n", virtio->name,
+	       queue->queue.index, queue->fill, queue->queue.count );
+	return 0;
+
+	/* There may be no way to disable individual queues: the
+	 * caller must reset the whole device to recover from a
+	 * failure.
+	 */
+ err_enable:
+	dma_unmap ( &queue->map, sizeof ( queue->hdr ) );
+ err_map:
+	return rc;
+}
+
+/**
+ * Submit I/O buffer to queue
+ *
+ * @v vnet		Virtio network device
+ * @v queue		Virtio network queue
  * @v iobuf		I/O buffer
- *
- * The virtqueue is kicked after the iobuf has been added.
+ * @v len		Submitted length
  */
-static void virtnet_enqueue_iob ( struct net_device *netdev,
-				  int vq_idx, struct io_buffer *iobuf ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	struct vring_virtqueue *vq = &virtnet->virtqueue[vq_idx];
-	struct virtio_net_hdr_modern *header = vq->empty_header;
-	unsigned int out = ( vq_idx == TX_INDEX ) ? 2 : 0;
-	unsigned int in = ( vq_idx == TX_INDEX ) ? 0 : 2;
-	size_t header_len = ( virtnet->virtio_version ?
-			      sizeof ( *header ) : sizeof ( header->legacy ) );
-	struct vring_list list[] = {
-		{
-			/* Share a single zeroed virtio net header between all
-			 * packets in a ring.  This works because this driver
-			 * does not use any advanced features so none of the
-			 * header fields get used.
-			 *
-			 * Some host implementations (notably Google Compute
-			 * Platform) are known to unconditionally write back
-			 * to header->flags for received packets.  Work around
-			 * this by using separate RX and TX headers.
-			 */
-			.addr = dma ( &vq->map, header ),
-			.length = header_len,
-		},
-		{
-			.addr = iob_dma ( iobuf ),
-			.length = iob_len ( iobuf ),
-		},
-	};
+static void virtio_net_submit ( struct virtio_net *vnet,
+				struct virtio_net_queue *queue,
+				struct io_buffer *iobuf, size_t len ) {
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_desc *desc;
+	unsigned int prod;
+	unsigned int slot;
+	unsigned int index;
 
-	DBGC2 ( virtnet, "VIRTIO-NET %p enqueuing iobuf %p on vq %d\n",
-		virtnet, iobuf, vq_idx );
+	/* Get next descriptor pair and consume slot */
+	prod = queue->queue.prod;
+	slot = queue->slots[ prod & queue->mask ];
+	index = ( slot * VIRTIO_NET_DESCS );
+	desc = &queue->queue.desc[index];
 
-	vring_add_buf ( vq, list, out, in, iobuf, 0 );
-	vring_kick ( virtnet->virtio_version ? &virtnet->vdev : NULL,
-		     virtnet->ioaddr, vq, 1 );
+	/* Populate descriptors */
+	desc[1].addr = cpu_to_le64 ( iob_dma ( iobuf ) );
+	desc[1].len = cpu_to_le32 ( len );
+	DBGC2 ( vnet, "VNET %s Q%d [%02x-%02x] is [%lx,%lx)\n",
+		virtio->name, queue->queue.index, index, ( index + 1 ),
+		virt_to_phys ( iobuf->data ),
+		( virt_to_phys ( iobuf->data ) + len ) );
+
+	/* Record I/O buffer */
+	assert ( queue->iobufs[slot] == NULL );
+	queue->iobufs[slot] = iobuf;
+
+	/* Submit descriptors */
+	virtio_submit ( &queue->queue, index );
 }
 
-/** Try to keep rx virtqueue filled with iobufs
+/**
+ * Complete I/O buffer
  *
- * @v netdev		Network device
+ * @v vnet		Virtio network device
+ * @v queue		Virtio network queue
+ * @v len		Length to fill in (or NULL to ignore)
+ * @ret iobuf		I/O buffer
  */
-static void virtnet_refill_rx_virtqueue ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	size_t len = ( netdev->max_pkt_len + 4 /* VLAN */ );
-
-	while ( virtnet->rx_num_iobufs < NUM_RX_BUF ) {
-		struct io_buffer *iobuf;
-
-		/* Try to allocate a buffer, stop for now if out of memory */
-		iobuf = alloc_rx_iob ( len, virtnet->dma );
-		if ( ! iobuf )
-			break;
-
-		/* Keep track of iobuf so close() can free it */
-		list_add ( &iobuf->list, &virtnet->rx_iobufs );
-
-		/* Mark packet length until we know the actual size */
-		iob_put ( iobuf, len );
-
-		virtnet_enqueue_iob ( netdev, RX_INDEX, iobuf );
-		virtnet->rx_num_iobufs++;
-	}
-}
-
-/** Helper to free all virtqueue memory
- *
- * @v netdev		Network device
- */
-static void virtnet_free_virtqueues ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	int i;
-
-	for ( i = 0; i < QUEUE_NB; i++ ) {
-		virtio_pci_unmap_capability ( &virtnet->virtqueue[i].notification );
-		vp_free_vq ( &virtnet->virtqueue[i] );
-	}
-
-	free ( virtnet->virtqueue );
-	virtnet->virtqueue = NULL;
-}
-
-/** Open network device, legacy virtio 0.9.5
- *
- * @v netdev	Network device
- * @ret rc	Return status code
- */
-static int virtnet_open_legacy ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	unsigned long ioaddr = virtnet->ioaddr;
-	u32 features;
-	int i;
-
-	/* Reset for sanity */
-	vp_reset ( ioaddr );
-
-	/* Allocate virtqueues */
-	virtnet->virtqueue = zalloc ( QUEUE_NB *
-				      sizeof ( *virtnet->virtqueue ) );
-	if ( ! virtnet->virtqueue )
-		return -ENOMEM;
-
-	/* Initialize rx/tx virtqueues */
-	for ( i = 0; i < QUEUE_NB; i++ ) {
-		if ( vp_find_vq ( ioaddr, i, &virtnet->virtqueue[i], virtnet->dma,
-                                  sizeof ( struct virtio_net_hdr_modern ) ) == -1 ) {
-			DBGC ( virtnet, "VIRTIO-NET %p cannot register queue %d\n",
-			       virtnet, i );
-			virtnet_free_virtqueues ( netdev );
-			return -ENOENT;
-		}
-	}
-
-	/* Initialize rx packets */
-	INIT_LIST_HEAD ( &virtnet->rx_iobufs );
-	virtnet->rx_num_iobufs = 0;
-	virtnet_refill_rx_virtqueue ( netdev );
-
-	/* Disable interrupts before starting */
-	netdev_irq ( netdev, 0 );
-
-	/* Driver is ready */
-	features = vp_get_features ( ioaddr );
-	vp_set_features ( ioaddr, features & ( ( 1 << VIRTIO_NET_F_MAC ) |
-					       ( 1 << VIRTIO_NET_F_MTU ) ) );
-	vp_set_status ( ioaddr, VIRTIO_CONFIG_S_DRIVER | VIRTIO_CONFIG_S_DRIVER_OK );
-	return 0;
-}
-
-/** Open network device, modern virtio 1.0
- *
- * @v netdev	Network device
- * @ret rc	Return status code
- */
-static int virtnet_open_modern ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	u64 features;
-	u8 status;
-
-	/* Negotiate features */
-	features = vpm_get_features ( &virtnet->vdev );
-	if ( ! ( features & VIRTIO_F_VERSION_1 ) ) {
-		vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_FAILED );
-		return -EINVAL;
-	}
-	vpm_set_features ( &virtnet->vdev, features & (
-		( 1ULL << VIRTIO_NET_F_MAC ) |
-		( 1ULL << VIRTIO_NET_F_MTU ) |
-		( 1ULL << VIRTIO_F_VERSION_1 ) |
-		( 1ULL << VIRTIO_F_ANY_LAYOUT ) |
-		( 1ULL << VIRTIO_F_IOMMU_PLATFORM ) ) );
-	vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_FEATURES_OK );
-
-	status = vpm_get_status ( &virtnet->vdev );
-	if ( ! ( status & VIRTIO_CONFIG_S_FEATURES_OK ) ) {
-		DBGC ( virtnet, "VIRTIO-NET %p device didn't accept features\n",
-		       virtnet );
-		vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_FAILED );
-		return -EINVAL;
-	}
-
-	/* Allocate virtqueues */
-	virtnet->virtqueue = zalloc ( QUEUE_NB *
-				      sizeof ( *virtnet->virtqueue ) );
-	if ( ! virtnet->virtqueue ) {
-		vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_FAILED );
-		return -ENOMEM;
-	}
-
-	/* Initialize rx/tx virtqueues */
-	if ( vpm_find_vqs ( &virtnet->vdev, QUEUE_NB, virtnet->virtqueue,
-                            virtnet->dma, sizeof ( struct virtio_net_hdr_modern ) ) ) {
-		DBGC ( virtnet, "VIRTIO-NET %p cannot register queues\n",
-		       virtnet );
-		virtnet_free_virtqueues ( netdev );
-		vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_FAILED );
-		return -ENOENT;
-	}
-
-	/* Disable interrupts before starting */
-	netdev_irq ( netdev, 0 );
-
-	vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_DRIVER_OK );
-
-	/* Initialize rx packets */
-	INIT_LIST_HEAD ( &virtnet->rx_iobufs );
-	virtnet->rx_num_iobufs = 0;
-	virtnet_refill_rx_virtqueue ( netdev );
-	return 0;
-}
-
-/** Open network device
- *
- * @v netdev	Network device
- * @ret rc	Return status code
- */
-static int virtnet_open ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-
-	if ( virtnet->virtio_version ) {
-		return virtnet_open_modern ( netdev );
-	} else {
-		return virtnet_open_legacy ( netdev );
-	}
-}
-
-/** Close network device
- *
- * @v netdev	Network device
- */
-static void virtnet_close ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
+static struct io_buffer * virtio_net_complete ( struct virtio_net *vnet,
+						struct virtio_net_queue *queue,
+						size_t *len ) {
+	struct virtio_device *virtio = &vnet->virtio;
 	struct io_buffer *iobuf;
-	struct io_buffer *next_iobuf;
+	unsigned int cons;
+	unsigned int slot;
+	unsigned int index;
 
-	if ( virtnet->virtio_version ) {
-		vpm_reset ( &virtnet->vdev );
-	} else {
-		vp_reset ( virtnet->ioaddr );
-	}
+	/* Complete descriptor pair and recycle slot */
+	cons = queue->queue.cons;
+	index = virtio_complete ( &queue->queue, len );
+	slot = ( index / VIRTIO_NET_DESCS );
+	queue->slots[ cons & queue->mask ] = slot;
 
-	/* Virtqueues can be freed now that NIC is reset */
-	virtnet_free_virtqueues ( netdev );
+	/* Complete I/O buffer */
+	iobuf = queue->iobufs[slot];
+	assert ( iobuf != NULL );
+	queue->iobufs[slot] = NULL;
+	DBGC2 ( vnet, "VNET %s Q%d [%02x-%02x] complete",
+		virtio->name, queue->queue.index, index, ( index + 1 ) );
+	if ( len )
+		DBGC2 ( vnet, " len %#zx\n", *len );
+	DBGC2 ( vnet, "\n" );
 
-	/* Free rx iobufs */
-	list_for_each_entry_safe ( iobuf, next_iobuf, &virtnet->rx_iobufs, list ) {
-		free_rx_iob ( iobuf );
-	}
-	INIT_LIST_HEAD ( &virtnet->rx_iobufs );
-	virtnet->rx_num_iobufs = 0;
+	return iobuf;
 }
 
-/** Transmit packet
+/******************************************************************************
  *
- * @v netdev	Network device
- * @v iobuf	I/O buffer
- * @ret rc	Return status code
+ * Network device interface
+ *
+ ******************************************************************************
  */
-static int virtnet_transmit ( struct net_device *netdev,
-			      struct io_buffer *iobuf ) {
-	virtnet_enqueue_iob ( netdev, TX_INDEX, iobuf );
+
+/**
+ * Refill receive queue
+ *
+ * @v vnet		Virtio network device
+ */
+static void virtio_net_refill_rx ( struct virtio_net *vnet ) {
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_net_queue *queue = &vnet->rx;
+	struct io_buffer *iobuf;
+	size_t len = vnet->mfs;
+	unsigned int refilled = 0;
+
+	/* Refill queue */
+	while ( ( queue->queue.prod - queue->queue.cons ) < queue->fill ) {
+
+		/* Allocate I/O buffer */
+		iobuf = alloc_rx_iob ( len, virtio->dma );
+		if ( ! iobuf ) {
+			/* Wait for next refill */
+			break;
+		}
+
+		/* Submit I/O buffer */
+		virtio_net_submit ( vnet, queue, iobuf, len );
+		refilled++;
+	}
+
+	/* Notify queue, if applicable */
+	if ( refilled )
+		virtio_notify ( &queue->queue );
+}
+
+/**
+ * Open network device
+ *
+ * @v netdev		Network device
+ * @ret rc		Return status code
+ */
+static int virtio_net_open ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	union virtio_net_header hdr;
+	int rc;
+
+	/* (Re)initialise device */
+	if ( ( rc = virtio_init ( virtio, &virtio_net_features ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not initialise: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_init;
+	}
+
+	/* Calculate header length */
+	vnet->hlen = ( virtio_is_legacy ( virtio ) ?
+		       sizeof ( hdr.legacy ) : sizeof ( hdr.modern ) );
+
+	/* Calculate maximum frame size */
+	vnet->mfs = ( ETH_HLEN + 4 /* possible VLAN */ + netdev->mtu );
+
+	/* Enable receive queue */
+	if ( ( rc = virtio_net_enable ( vnet, &vnet->rx ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not enable RX: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_rx;
+	}
+
+	/* Enable transmit queue */
+	if ( ( rc = virtio_net_enable ( vnet, &vnet->tx ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not enable TX: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_tx;
+	}
+
+	/* Report driver readiness */
+	virtio_status ( virtio, VIRTIO_STAT_DRIVER_OK );
+
+	/* Refill receive queue */
+	virtio_net_refill_rx ( vnet );
+
+	return 0;
+
+	dma_unmap ( &vnet->tx.map, sizeof ( vnet->tx.hdr ) );
+ err_tx:
+	dma_unmap ( &vnet->rx.map, sizeof ( vnet->rx.hdr ) );
+ err_rx:
+	/* There may be no way to disable individual queues: we must
+	 * reset the whole device instead and then free the queues.
+	 */
+	virtio_reset ( virtio );
+	virtio_free ( virtio, &vnet->rx.queue );
+	virtio_free ( virtio, &vnet->tx.queue );
+ err_init:
+	return rc;
+}
+
+/**
+ * Close network device
+ *
+ * @v netdev		Network device
+ */
+static void virtio_net_close ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	unsigned int i;
+
+	/* Reset device */
+	virtio_reset ( virtio );
+
+	/* Unmap headers (now that device is guaranteed idle) */
+	dma_unmap ( &vnet->rx.map, sizeof ( vnet->rx.hdr ) );
+	dma_unmap ( &vnet->tx.map, sizeof ( vnet->tx.hdr ) );
+
+	/* Free queues */
+	virtio_free ( virtio, &vnet->rx.queue );
+	virtio_free ( virtio, &vnet->tx.queue );
+
+	/* Discard any incomplete RX buffers */
+	for ( i = 0 ; i < VIRTIO_NET_RX_MAX ; i++ )
+		free_rx_iob ( vnet->rx_iobufs[i] );
+}
+
+/**
+ * Transmit packet
+ *
+ * @v netdev		Network device
+ * @v iobuf		I/O buffer
+ * @ret rc		Return status code
+ */
+static int virtio_net_transmit ( struct net_device *netdev,
+				 struct io_buffer *iobuf ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_net_queue *queue = &vnet->tx;
+
+	/* Check for an available transmit descriptor */
+	if ( ( queue->queue.prod - queue->queue.cons ) >= queue->fill ) {
+		DBGC ( vnet, "VNET %s out of transmit descriptors\n",
+		       virtio->name );
+		return -ENOBUFS;
+	}
+
+	/* Submit I/O buffer */
+	virtio_net_submit ( vnet, queue, iobuf, iob_len ( iobuf ) );
+
+	/* Notify queue */
+	virtio_notify ( &queue->queue );
+
 	return 0;
 }
 
-/** Complete packet transmission
+/**
+ * Poll for completed packets
  *
- * @v netdev	Network device
+ * @v netdev		Network device
  */
-static void virtnet_process_tx_packets ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	struct vring_virtqueue *tx_vq = &virtnet->virtqueue[TX_INDEX];
+static void virtio_net_poll_tx ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_net_queue *queue = &vnet->tx;
+	struct io_buffer *iobuf;
 
-	while ( vring_more_used ( tx_vq ) ) {
-		struct io_buffer *iobuf = vring_get_buf ( tx_vq, NULL );
+	/* Poll for completed descriptors */
+	while ( virtio_completions ( &queue->queue ) ) {
 
-		DBGC2 ( virtnet, "VIRTIO-NET %p tx complete iobuf %p\n",
-			virtnet, iobuf );
-
+		/* Complete I/O buffer */
+		iobuf = virtio_net_complete ( vnet, queue, NULL );
 		netdev_tx_complete ( netdev, iobuf );
 	}
 }
 
-/** Complete packet reception
+/**
+ * Poll for received packets
  *
- * @v netdev	Network device
+ * @v netdev		Network device
  */
-static void virtnet_process_rx_packets ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	struct vring_virtqueue *rx_vq = &virtnet->virtqueue[RX_INDEX];
+static void virtio_net_poll_rx ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_net_queue *queue = &vnet->rx;
+	struct io_buffer *iobuf;
+	size_t len;
 
-	while ( vring_more_used ( rx_vq ) ) {
-		unsigned int len;
-		struct io_buffer *iobuf = vring_get_buf ( rx_vq, &len );
+	/* Poll for completed descriptors */
+	while ( virtio_completions ( &queue->queue ) > 0 ) {
 
-		/* Release ownership of iobuf */
-		list_del ( &iobuf->list );
-		virtnet->rx_num_iobufs--;
-
-		/* Update iobuf length */
-		iob_unput ( iobuf, iob_len ( iobuf ) );
-		iob_put ( iobuf, len - sizeof ( struct virtio_net_hdr ) );
-
-		DBGC2 ( virtnet, "VIRTIO-NET %p rx complete iobuf %p len %zd\n",
-			virtnet, iobuf, iob_len ( iobuf ) );
-
-		/* Pass completed packet to the network stack */
+		/* Complete I/O buffer */
+		iobuf = virtio_net_complete ( vnet, queue, &len );
+		iob_put ( iobuf, ( len - vnet->hlen ) );
 		netdev_rx ( netdev, iobuf );
 	}
-
-	virtnet_refill_rx_virtqueue ( netdev );
 }
 
-/** Poll for completed and received packets
+/**
+ * Poll for completed and received packets
  *
- * @v netdev	Network device
+ * @v netdev		Network device
  */
-static void virtnet_poll ( struct net_device *netdev ) {
-	struct virtnet_nic *virtnet = netdev->priv;
+static void virtio_net_poll ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
 
-	/* Acknowledge interrupt.  This is necessary for UNDI operation and
-	 * interrupts that are raised despite VRING_AVAIL_F_NO_INTERRUPT being
-	 * set (that flag is just a hint and the hypervisor does not have to
-	 * honor it).
-	 */
-	if ( virtnet->virtio_version ) {
-		vpm_get_isr ( &virtnet->vdev );
-	} else {
-		vp_get_isr ( virtnet->ioaddr );
-	}
+	/* Poll for completed packets */
+	virtio_net_poll_tx ( netdev );
 
-	virtnet_process_tx_packets ( netdev );
-	virtnet_process_rx_packets ( netdev );
+	/* Poll for received packets */
+	virtio_net_poll_rx ( netdev );
+
+	/* Refill receive queue */
+	virtio_net_refill_rx ( vnet );
 }
 
-/** Enable or disable interrupts
- *
- * @v netdev	Network device
- * @v enable	Interrupts should be enabled
- */
-static void virtnet_irq ( struct net_device *netdev, int enable ) {
-	struct virtnet_nic *virtnet = netdev->priv;
-	int i;
-
-	for ( i = 0; i < QUEUE_NB; i++ ) {
-		if ( enable )
-			vring_enable_cb ( &virtnet->virtqueue[i] );
-		else
-			vring_disable_cb ( &virtnet->virtqueue[i] );
-	}
-}
-
-/** virtio-net device operations */
-static struct net_device_operations virtnet_operations = {
-	.open = virtnet_open,
-	.close = virtnet_close,
-	.transmit = virtnet_transmit,
-	.poll = virtnet_poll,
-	.irq = virtnet_irq,
+/** Virtio network device operations */
+static struct net_device_operations virtio_net_operations = {
+	.open		= virtio_net_open,
+	.close		= virtio_net_close,
+	.transmit	= virtio_net_transmit,
+	.poll		= virtio_net_poll,
 };
 
-/**
- * Probe PCI device, legacy virtio 0.9.5
+/******************************************************************************
  *
- * @v pci	PCI device
- * @ret rc	Return status code
- */
-static int virtnet_probe_legacy ( struct pci_device *pci ) {
-	unsigned long ioaddr = pci->ioaddr;
-	struct net_device *netdev;
-	struct virtnet_nic *virtnet;
-	u32 features;
-	u16 mtu;
-	int rc;
-
-	/* Allocate and hook up net device */
-	netdev = alloc_etherdev ( sizeof ( *virtnet ) );
-	if ( ! netdev )
-		return -ENOMEM;
-	netdev_init ( netdev, &virtnet_operations );
-	virtnet = netdev->priv;
-	virtnet->ioaddr = ioaddr;
-	pci_set_drvdata ( pci, netdev );
-	netdev->dev = &pci->dev;
-
-	DBGC ( virtnet, "VIRTIO-NET %p busaddr=%s ioaddr=%#lx irq=%d\n",
-	       virtnet, pci->dev.name, ioaddr, pci->irq );
-
-	/* Enable PCI bus master and reset NIC */
-	adjust_pci_device ( pci );
-
-	/* Configure DMA */
-	virtnet->dma =  &pci->dma;
-	dma_set_mask_64bit ( virtnet->dma );
-	netdev->dma = virtnet->dma;
-
-	vp_reset ( ioaddr );
-
-	/* Load MAC address and MTU */
-	features = vp_get_features ( ioaddr );
-	if ( features & ( 1 << VIRTIO_NET_F_MAC ) ) {
-		vp_get ( ioaddr, offsetof ( struct virtio_net_config, mac ),
-			 netdev->hw_addr, ETH_ALEN );
-		DBGC ( virtnet, "VIRTIO-NET %p mac=%s\n", virtnet,
-		       eth_ntoa ( netdev->hw_addr ) );
-	}
-	if ( features & ( 1ULL << VIRTIO_NET_F_MTU ) ) {
-		vp_get ( ioaddr, offsetof ( struct virtio_net_config, mtu ),
-			 &mtu, sizeof ( mtu ) );
-		DBGC ( virtnet, "VIRTIO-NET %p mtu=%d\n", virtnet, mtu );
-		netdev->max_pkt_len = ( mtu + ETH_HLEN );
-		netdev->mtu = mtu;
-	}
-
-	/* Register network device */
-	if ( ( rc = register_netdev ( netdev ) ) != 0 )
-		goto err_register_netdev;
-
-	/* Mark link as up, control virtqueue is not used */
-	netdev_link_up ( netdev );
-
-	return 0;
-
-	unregister_netdev ( netdev );
-err_register_netdev:
-	vp_reset ( ioaddr );
-	netdev_nullify ( netdev );
-	netdev_put ( netdev );
-	return rc;
-}
-
-/**
- * Probe PCI device, modern virtio 1.0
+ * PCI interface
  *
- * @v pci	PCI device
- * @v found_dev	Set to non-zero if modern device was found (probe may still fail)
- * @ret rc	Return status code
+ ******************************************************************************
  */
-static int virtnet_probe_modern ( struct pci_device *pci, int *found_dev ) {
-	struct net_device *netdev;
-	struct virtnet_nic *virtnet;
-	u64 features;
-	u16 mtu;
-	int rc, common, isr, notify, config, device;
-
-	common = virtio_pci_find_capability ( pci, VIRTIO_PCI_CAP_COMMON_CFG );
-	if ( ! common ) {
-		DBG ( "Common virtio capability not found!\n" );
-		return -ENODEV;
-	}
-	*found_dev = 1;
-
-	isr = virtio_pci_find_capability ( pci, VIRTIO_PCI_CAP_ISR_CFG );
-	notify = virtio_pci_find_capability ( pci, VIRTIO_PCI_CAP_NOTIFY_CFG );
-	config = virtio_pci_find_capability ( pci, VIRTIO_PCI_CAP_PCI_CFG );
-	if ( ! isr || ! notify || ! config ) {
-		DBG ( "Missing virtio capabilities %i/%i/%i/%i\n",
-		      common, isr, notify, config );
-		return -EINVAL;
-	}
-	device = virtio_pci_find_capability ( pci, VIRTIO_PCI_CAP_DEVICE_CFG );
-
-	/* Allocate and hook up net device */
-	netdev = alloc_etherdev ( sizeof ( *virtnet ) );
-	if ( ! netdev )
-		return -ENOMEM;
-	netdev_init ( netdev, &virtnet_operations );
-	virtnet = netdev->priv;
-
-	pci_set_drvdata ( pci, netdev );
-	netdev->dev = &pci->dev;
-
-	DBGC ( virtnet, "VIRTIO-NET modern %p busaddr=%s irq=%d\n",
-	       virtnet, pci->dev.name, pci->irq );
-
-	virtnet->vdev.pci = pci;
-	rc = virtio_pci_map_capability ( pci, common,
-		sizeof ( struct virtio_pci_common_cfg ), 4,
-		0, sizeof ( struct virtio_pci_common_cfg ),
-		&virtnet->vdev.common );
-	if ( rc )
-		goto err_map_common;
-
-	rc = virtio_pci_map_capability ( pci, isr, sizeof ( u8 ), 1,
-		0, 1,
-		&virtnet->vdev.isr );
-	if ( rc )
-		goto err_map_isr;
-
-	virtnet->vdev.notify_cap_pos = notify;
-	virtnet->vdev.cfg_cap_pos = config;
-
-	/* Map the device capability */
-	if ( device ) {
-		rc = virtio_pci_map_capability ( pci, device,
-			0, 4, 0, sizeof ( struct virtio_net_config ),
-			&virtnet->vdev.device );
-		if ( rc )
-			goto err_map_device;
-	}
-
-	/* Enable the PCI device */
-	adjust_pci_device ( pci );
-
-	/* Configure DMA */
-	virtnet->dma =  &pci->dma;
-	dma_set_mask_64bit ( virtnet->dma );
-	netdev->dma = virtnet->dma;
-
-	/* Reset the device and set initial status bits */
-	vpm_reset ( &virtnet->vdev );
-	vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_ACKNOWLEDGE );
-	vpm_add_status ( &virtnet->vdev, VIRTIO_CONFIG_S_DRIVER );
-
-	/* Load MAC address and MTU */
-	if ( device ) {
-		features = vpm_get_features ( &virtnet->vdev );
-		if ( features & ( 1ULL << VIRTIO_NET_F_MAC ) ) {
-			vpm_get ( &virtnet->vdev,
-				  offsetof ( struct virtio_net_config, mac ),
-				  netdev->hw_addr, ETH_ALEN );
-			DBGC ( virtnet, "VIRTIO-NET %p mac=%s\n", virtnet,
-			       eth_ntoa ( netdev->hw_addr ) );
-		}
-		if ( features & ( 1ULL << VIRTIO_NET_F_MTU ) ) {
-			vpm_get ( &virtnet->vdev,
-				  offsetof ( struct virtio_net_config, mtu ),
-				  &mtu, sizeof ( mtu ) );
-			DBGC ( virtnet, "VIRTIO-NET %p mtu=%d\n", virtnet,
-			       mtu );
-			netdev->max_pkt_len = ( mtu + ETH_HLEN );
-		}
-	}
-
-	/* We need a valid MAC address */
-	if ( ! is_valid_ether_addr ( netdev->hw_addr ) ) {
-		rc = -EADDRNOTAVAIL;
-		goto err_mac_address;
-	}
-
-	/* Register network device */
-	if ( ( rc = register_netdev ( netdev ) ) != 0 )
-		goto err_register_netdev;
-
-	/* Mark link as up, control virtqueue is not used */
-	netdev_link_up ( netdev );
-
-	virtnet->virtio_version = 1;
-	return 0;
-
-	unregister_netdev ( netdev );
-err_register_netdev:
-err_mac_address:
-	vpm_reset ( &virtnet->vdev );
-	netdev_nullify ( netdev );
-	netdev_put ( netdev );
-	virtio_pci_unmap_capability ( &virtnet->vdev.device );
-err_map_device:
-	virtio_pci_unmap_capability ( &virtnet->vdev.isr );
-err_map_isr:
-	virtio_pci_unmap_capability ( &virtnet->vdev.common );
-err_map_common:
-	return rc;
-}
 
 /**
  * Probe PCI device
  *
- * @v pci	PCI device
- * @ret rc	Return status code
+ * @v pci		PCI device
+ * @ret rc		Return status code
  */
-static int virtnet_probe ( struct pci_device *pci ) {
-	int found_modern = 0;
-	int rc = virtnet_probe_modern ( pci, &found_modern );
-	if ( ! found_modern && pci->device < 0x1040 ) {
-		/* fall back to the legacy probe */
-		rc = virtnet_probe_legacy ( pci );
+static int virtio_net_probe ( struct pci_device *pci ) {
+	struct net_device *netdev;
+	struct virtio_net *vnet;
+	struct virtio_device *virtio;
+	int rc;
+
+	/* Allocate and initialise net device */
+	netdev = alloc_etherdev ( sizeof ( *vnet ) );
+	if ( ! netdev ) {
+		rc = -ENOMEM;
+		goto err_alloc;
 	}
+	netdev_init ( netdev, &virtio_net_operations );
+	vnet = netdev->priv;
+	pci_set_drvdata ( pci, netdev );
+	netdev->dev = &pci->dev;
+	netdev->dma = &pci->dma;
+	memset ( vnet, 0, sizeof ( *vnet ) );
+	virtio = &vnet->virtio;
+	virtio_net_queue_init ( &vnet->rx, vnet->rx_iobufs, vnet->rx_slots,
+				VIRTIO_NET_RX_INDEX, VIRTIO_NET_RX_COUNT,
+				VIRTIO_NET_RX_MAX, DMA_RX,
+				VIRTIO_DESC_FL_WRITE );
+	virtio_net_queue_init ( &vnet->tx, vnet->tx_iobufs, vnet->tx_slots,
+				VIRTIO_NET_TX_INDEX, VIRTIO_NET_TX_COUNT,
+				VIRTIO_NET_TX_MAX, DMA_TX, 0 );
+
+	/* Map PCI device */
+	if ( ( rc = virtio_pci_map ( virtio, pci ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not map: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_pci_map;
+	}
+
+	/* Initialise device */
+	if ( ( rc = virtio_init ( virtio, &virtio_net_features ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not initialise: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_init;
+	}
+
+	/* Get MAC address */
+	virtio_net_mac ( netdev );
+
+	/* Set MTU */
+	virtio_net_mtu ( netdev );
+
+	/* Register network device */
+	if ( ( rc = register_netdev ( netdev ) ) != 0 )
+		goto err_register;
+
+	/* Mark as link up, since we have no way to test link state changes */
+	netdev_link_up ( netdev );
+
+	return 0;
+
+	unregister_netdev ( netdev );
+ err_register:
+	virtio_reset ( virtio );
+ err_init:
+	virtio_unmap ( virtio );
+ err_pci_map:
+	netdev_nullify ( netdev );
+	netdev_put ( netdev );
+ err_alloc:
 	return rc;
 }
 
 /**
- * Remove device
+ * Remove PCI device
  *
- * @v pci	PCI device
+ * @v pci		PCI device
  */
-static void virtnet_remove ( struct pci_device *pci ) {
+static void virtio_net_remove ( struct pci_device *pci ) {
 	struct net_device *netdev = pci_get_drvdata ( pci );
-	struct virtnet_nic *virtnet = netdev->priv;
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
 
-	virtio_pci_unmap_capability ( &virtnet->vdev.device );
-	virtio_pci_unmap_capability ( &virtnet->vdev.isr );
-	virtio_pci_unmap_capability ( &virtnet->vdev.common );
-
+	/* Unregister network device */
 	unregister_netdev ( netdev );
+
+	/* Reset device */
+	virtio_reset ( virtio );
+
+	/* Free network device */
+	virtio_unmap ( virtio );
 	netdev_nullify ( netdev );
 	netdev_put ( netdev );
 }
 
-static struct pci_device_id virtnet_nics[] = {
-PCI_ROM(0x1af4, 0x1000, "virtio-net", "Virtio Network Interface", 0),
-PCI_ROM(0x1af4, 0x1041, "virtio-net", "Virtio Network Interface 1.0", 0),
+/** Virtio network PCI device IDs */
+static struct pci_device_id virtio_net_ids[] = {
+	PCI_ROM ( 0x1af4, 0x1000, "virtio-net", "Virtio (legacy)", 0 ),
+	PCI_ROM ( 0x1af4, 0x1041, "virtio-net", "Virtio (modern)", 0 ),
 };
 
-struct pci_driver virtnet_driver __pci_driver = {
-	.ids = virtnet_nics,
-	.id_count = ( sizeof ( virtnet_nics ) / sizeof ( virtnet_nics[0] ) ),
-	.probe = virtnet_probe,
-	.remove = virtnet_remove,
+/** Virtio network PCI driver */
+struct pci_driver virtio_net_driver __pci_driver = {
+	.ids = virtio_net_ids,
+	.id_count = ( sizeof ( virtio_net_ids ) /
+		      sizeof ( virtio_net_ids[0] ) ),
+	.probe = virtio_net_probe,
+	.remove = virtio_net_remove,
 };

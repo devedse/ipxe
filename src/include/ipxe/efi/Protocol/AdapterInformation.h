@@ -11,10 +11,10 @@
 
 **/
 
-#ifndef __EFI_ADAPTER_INFORMATION_PROTOCOL_H__
-#define __EFI_ADAPTER_INFORMATION_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_ADAPTER_INFORMATION_PROTOCOL_GUID \
   { \
@@ -253,5 +253,3 @@ extern EFI_GUID  gEfiAdapterInfoNetworkBootGuid;
 extern EFI_GUID  gEfiAdapterInfoSanMacAddressGuid;
 
 extern EFI_GUID  gEfiAdapterInfoUndiIpv6SupportGuid;
-
-#endif

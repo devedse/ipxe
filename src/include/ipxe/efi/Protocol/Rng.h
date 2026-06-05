@@ -8,10 +8,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef EFI_RNG_PROTOCOL_H_
-#define EFI_RNG_PROTOCOL_H_
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Guid/Rng.h>
 
@@ -26,5 +26,3 @@ FILE_LICENCE ( BSD2_PATENT );
 typedef EFI_RNG_INTERFACE EFI_RNG_PROTOCOL;
 
 extern EFI_GUID  gEfiRngProtocolGuid;
-
-#endif

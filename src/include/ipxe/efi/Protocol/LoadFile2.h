@@ -12,10 +12,10 @@
 
 **/
 
-#ifndef __EFI_LOAD_FILE2_PROTOCOL_H__
-#define __EFI_LOAD_FILE2_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_LOAD_FILE2_PROTOCOL_GUID \
   { \
@@ -40,7 +40,7 @@ typedef struct _EFI_LOAD_FILE2_PROTOCOL EFI_LOAD_FILE2_PROTOCOL;
                      Buffer. On output with a return code of EFI_BUFFER_TOO_SMALL,
                      the size of Buffer required to retrieve the requested file.
   @param  Buffer     The memory buffer to transfer the file to. IF Buffer is NULL,
-                     then no the size of the requested file is returned in
+                     then the size of the requested file is returned in
                      BufferSize.
 
   @retval EFI_SUCCESS           The file was loaded.
@@ -76,5 +76,3 @@ struct _EFI_LOAD_FILE2_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiLoadFile2ProtocolGuid;
-
-#endif

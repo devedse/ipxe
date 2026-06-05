@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 #include <errno.h>
 #include <stdlib.h>
@@ -35,6 +36,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/efi/efi_image.h>
 #include <ipxe/efi/efi_shim.h>
 #include <ipxe/efi/efi_fdt.h>
+#include <ipxe/efi/efi_utils.h>
 #include <ipxe/image.h>
 #include <ipxe/init.h>
 #include <ipxe/features.h>
@@ -60,7 +62,7 @@ FEATURE ( FEATURE_IMAGE, "EFI", DHCP_EB_FEATURE_EFI, 1 );
 #define EEFI_START( efirc ) EPLATFORM ( EINFO_EEFI_START, efirc )
 
 /**
- * Create device path for image
+ * Create a URI device path for image
  *
  * @v image		EFI image
  * @v parent		Parent device path
@@ -69,7 +71,51 @@ FEATURE ( FEATURE_IMAGE, "EFI", DHCP_EB_FEATURE_EFI, 1 );
  * The caller must eventually free() the device path.
  */
 static EFI_DEVICE_PATH_PROTOCOL *
-efi_image_path ( struct image *image, EFI_DEVICE_PATH_PROTOCOL *parent ) {
+efi_image_uripath ( struct image *image, EFI_DEVICE_PATH_PROTOCOL *parent ) {
+	EFI_DEVICE_PATH_PROTOCOL *path;
+	URI_DEVICE_PATH *uripath;
+	EFI_DEVICE_PATH_PROTOCOL *end;
+	size_t uri_len;
+	size_t prefix_len;
+	size_t uripath_len;
+	size_t len;
+
+	/* Calculate device path lengths */
+	prefix_len = efi_path_len ( parent );
+	uri_len = format_uri ( image->uri, NULL, 0 );
+	uripath_len = ( sizeof ( *uripath ) + uri_len + 1 /* NUL */ );
+	len = ( prefix_len + uripath_len + sizeof ( *end ) );
+
+	/* Allocate device path */
+	path = zalloc ( len );
+	if ( ! path )
+		return NULL;
+
+	/* Construct device path */
+	memcpy ( path, parent, prefix_len );
+	uripath = ( ( ( void * ) path ) + prefix_len );
+	uripath->Header.Type = MESSAGING_DEVICE_PATH;
+	uripath->Header.SubType = MSG_URI_DP;
+	uripath->Header.Length[0] = ( uripath_len & 0xff );
+	uripath->Header.Length[1] = ( uripath_len >> 8 );
+	format_uri ( image->uri, uripath->Uri, ( uri_len + 1 /* NUL */ ) );
+	end = ( ( ( void * ) uripath ) + uripath_len );
+	efi_path_terminate ( end );
+
+	return path;
+}
+
+/**
+ * Create a file device path for image
+ *
+ * @v image		EFI image
+ * @v parent		Parent device path
+ * @ret path		Device path, or NULL on failure
+ *
+ * The caller must eventually free() the device path.
+ */
+static EFI_DEVICE_PATH_PROTOCOL *
+efi_image_filepath ( struct image *image, EFI_DEVICE_PATH_PROTOCOL *parent ) {
 	EFI_DEVICE_PATH_PROTOCOL *path;
 	FILEPATH_DEVICE_PATH *filepath;
 	EFI_DEVICE_PATH_PROTOCOL *end;
@@ -152,10 +198,14 @@ __weak int efi_fdt_uninstall ( void ) {
 static int efi_image_exec ( struct image *image ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	struct efi_snp_device *snpdev;
-	EFI_DEVICE_PATH_PROTOCOL *path;
+	struct net_device *netdev;
+	EFI_DEVICE_PATH_PROTOCOL *basepath;
+	EFI_DEVICE_PATH_PROTOCOL *devpath;
+	EFI_DEVICE_PATH_PROTOCOL *imgpath;
 	EFI_LOADED_IMAGE_PROTOCOL *loaded;
 	struct image *shim;
 	struct image *exec;
+	EFI_HANDLE parent;
 	EFI_HANDLE device;
 	EFI_HANDLE handle;
 	EFI_MEMORY_TYPE type;
@@ -164,15 +214,61 @@ static int efi_image_exec ( struct image *image ) {
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Find an appropriate device handle to use */
+	/* Find an appropriate parent device handle to use */
 	snpdev = last_opened_snpdev();
-	if ( ! snpdev ) {
-		DBGC ( image, "EFIIMAGE %s could not identify SNP device\n",
-		       image->name );
-		rc = -ENODEV;
-		goto err_no_snpdev;
+	if ( snpdev ) {
+		/* We have a netX: use this as the base device */
+		parent = snpdev->handle;
+		basepath = snpdev->path;
+		netdev = netdev_get ( snpdev->netdev );
+		DBGC ( image, "EFIIMAGE %s using %s %s\n", image->name,
+		       netdev->name, efi_devpath_text ( basepath ) );
+	} else {
+		/* We have no netX: fall back to using our own loaded
+		 * image's device.
+		 */
+		parent = efi_loaded_image->DeviceHandle;
+		basepath = efi_loaded_image_path;
+		netdev = NULL;
+		if ( efi_test ( parent, &efi_device_path_protocol_guid ) != 0 )
+			parent = NULL;
+		DBGC ( image, "EFIIMAGE %s using %s%s\n",
+		       image->name, efi_devpath_text ( basepath ),
+		       ( parent ? "" : " (removed)" ) );
 	}
-	device = snpdev->handle;
+
+	/* Construct URI device path */
+	devpath = efi_image_uripath ( image, basepath );
+	if ( ! devpath ) {
+		DBGC ( image, "EFIIMAGE %s could not create URI device path\n",
+		       image->name );
+		rc = -ENOMEM;
+		goto err_device_path;
+	}
+
+	/* Create device handle */
+	device = NULL;
+	if ( ( efirc = bs->InstallMultipleProtocolInterfaces (
+			&device,
+			&efi_device_path_protocol_guid, devpath,
+			NULL ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		DBGC ( image, "EFIIMAGE %s could not install %s: %s\n",
+		       image->name, efi_devpath_text ( devpath ),
+		       strerror ( rc ) );
+		goto err_path_install;
+	}
+	DBGC ( image, "EFIIMAGE %s device is %s\n",
+	       image->name, efi_handle_name ( device ) );
+
+	/* Add as a child of the parent device */
+	if ( ( parent != NULL ) &&
+	     ( rc = efi_child_add ( parent, device ) ) != 0 ) {
+		DBGC ( image, "EFIIMAGE %s could not become child of %s: %s\n",
+		       image->name, efi_handle_name ( parent ),
+		       strerror ( rc ) );
+		goto err_child_add;
+	}
 
 	/* Use shim instead of directly executing image if applicable */
 	shim = ( efi_can_load ( image ) ?
@@ -197,7 +293,8 @@ static int efi_image_exec ( struct image *image ) {
 	}
 
 	/* Install PXE base code protocol */
-	if ( ( rc = efi_pxe_install ( device, snpdev->netdev ) ) != 0 ){
+	if ( ( netdev != NULL ) &&
+	     ( rc = efi_pxe_install ( device, netdev ) ) != 0 ) {
 		DBGC ( image, "EFIIMAGE %s could not install PXE protocol: "
 		       "%s\n", image->name, strerror ( rc ) );
 		goto err_pxe_install;
@@ -217,14 +314,16 @@ static int efi_image_exec ( struct image *image ) {
 		goto err_fdt_install;
 	}
 
-	/* Create device path for image */
-	path = efi_image_path ( exec, snpdev->path );
-	if ( ! path ) {
-		DBGC ( image, "EFIIMAGE %s could not create device path\n",
-		       image->name );
+	/* Create file device path for image */
+	imgpath = efi_image_filepath ( exec, devpath );
+	if ( ! imgpath ) {
+		DBGC ( image, "EFIIMAGE %s could not create file device "
+		       "path\n", image->name );
 		rc = -ENOMEM;
 		goto err_image_path;
 	}
+	DBGC ( image, "EFIIMAGE %s file is %s\n",
+	       image->name, efi_devpath_text ( imgpath ) );
 
 	/* Create command line for image */
 	cmdline = efi_image_cmdline ( image );
@@ -250,7 +349,7 @@ static int efi_image_exec ( struct image *image ) {
 	 * therefore use the .rwdata field rather than .data.
 	 */
 	handle = NULL;
-	if ( ( efirc = bs->LoadImage ( FALSE, efi_image_handle, path,
+	if ( ( efirc = bs->LoadImage ( FALSE, efi_image_handle, imgpath,
 				       exec->rwdata, exec->len,
 				       &handle ) ) != 0 ) {
 		/* Not an EFI image */
@@ -301,9 +400,6 @@ static int efi_image_exec ( struct image *image ) {
 	/* Reset console since image will probably use it */
 	console_reset();
 
-	/* Assume that image may cause SNP device to be removed */
-	snpdev = NULL;
-
 	/* Start the image */
 	if ( ( efirc = bs->StartImage ( handle, NULL, NULL ) ) != 0 ) {
 		rc = -EEFI_START ( efirc );
@@ -348,20 +444,31 @@ static int efi_image_exec ( struct image *image ) {
  err_shim_install:
 	free ( cmdline );
  err_cmdline:
-	free ( path );
+	free ( imgpath );
  err_image_path:
 	efi_fdt_uninstall();
  err_fdt_install:
 	efi_download_uninstall ( device );
  err_download_install:
-	efi_pxe_uninstall ( device );
+	if ( netdev )
+		efi_pxe_uninstall ( device );
  err_pxe_install:
 	efi_file_uninstall ( device );
  err_file_install:
 	unregister_image ( image );
  err_register_image:
 	image->flags ^= toggle;
- err_no_snpdev:
+	if ( parent )
+		efi_child_del ( parent, device );
+ err_child_add:
+	bs->UninstallMultipleProtocolInterfaces (
+			device,
+			&efi_device_path_protocol_guid, devpath,
+			NULL );
+ err_path_install:
+	free ( devpath );
+ err_device_path:
+	netdev_put ( netdev );
 	return rc;
 }
 

@@ -10,10 +10,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __EFI_MANAGED_NETWORK_PROTOCOL_H__
-#define __EFI_MANAGED_NETWORK_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Protocol/SimpleNetwork.h>
 
@@ -362,5 +362,3 @@ struct _EFI_MANAGED_NETWORK_PROTOCOL {
 
 extern EFI_GUID  gEfiManagedNetworkServiceBindingProtocolGuid;
 extern EFI_GUID  gEfiManagedNetworkProtocolGuid;
-
-#endif

@@ -15,14 +15,13 @@ struct pubkey_test {
 	const struct asn1_cursor private;
 	/** Public key */
 	const struct asn1_cursor public;
+	/** Random data input */
+	const void *random;
+	/** Random data input length */
+	size_t random_len;
 	/** Plaintext */
 	const struct asn1_cursor plaintext;
-	/** Ciphertext
-	 *
-	 * Note that the encryption process may include some random
-	 * padding, so a given plaintext will encrypt to multiple
-	 * different ciphertexts.
-	 */
+	/** Ciphertext */
 	const struct asn1_cursor ciphertext;
 };
 
@@ -34,6 +33,10 @@ struct pubkey_sign_test {
 	const struct asn1_cursor private;
 	/** Public key */
 	const struct asn1_cursor public;
+	/** Random data input */
+	const void *random;
+	/** Random data input length */
+	size_t random_len;
 	/** Plaintext */
 	const void *plaintext;
 	/** Plaintext length */
@@ -49,6 +52,9 @@ struct pubkey_sign_test {
 
 /** Define inline public key data */
 #define PUBLIC(...) { __VA_ARGS__ }
+
+/** Define inline random data */
+#define RANDOM(...) { __VA_ARGS__ }
 
 /** Define inline plaintext data */
 #define PLAINTEXT(...) { __VA_ARGS__ }
@@ -66,14 +72,16 @@ struct pubkey_sign_test {
  * @v PUBKEY		Public-key algorithm
  * @v PRIVATE		Private key
  * @v PUBLIC		Public key
+ * @v RANDOM		Random data
  * @v PLAINTEXT		Plaintext
  * @v CIPHERTEXT	Ciphertext
  * @ret test		Encryption and decryption test
  */
-#define PUBKEY_TEST( name, PUBKEY, PRIVATE, PUBLIC, PLAINTEXT,		\
-			   CIPHERTEXT )					\
+#define PUBKEY_TEST( name, PUBKEY, PRIVATE, PUBLIC, RANDOM, PLAINTEXT,	\
+		     CIPHERTEXT )					\
 	static const uint8_t name ## _private[] = PRIVATE;		\
 	static const uint8_t name ## _public[] = PUBLIC;		\
+	static const uint8_t name ## _random[] = RANDOM;		\
 	static const uint8_t name ## _plaintext[] = PLAINTEXT;		\
 	static const uint8_t name ## _ciphertext[] = CIPHERTEXT;	\
 	static struct pubkey_test name = {				\
@@ -86,6 +94,8 @@ struct pubkey_sign_test {
 			.data = name ## _public,			\
 			.len = sizeof ( name ## _public ),		\
 		},							\
+		.random = name ## _random,				\
+		.random_len = sizeof ( name ## _random ),		\
 		.plaintext = {						\
 			.data = name ## _plaintext,			\
 			.len = sizeof ( name ## _plaintext ),		\
@@ -103,15 +113,17 @@ struct pubkey_sign_test {
  * @v PUBKEY		Public-key algorithm
  * @v PRIVATE		Private key
  * @v PUBLIC		Public key
+ * @v RANDOM		Random data
  * @v PLAINTEXT		Plaintext
  * @v DIGEST		Digest algorithm
  * @v SIGNATURE		Signature
  * @ret test		Signature test
  */
-#define PUBKEY_SIGN_TEST( name, PUBKEY, PRIVATE, PUBLIC, PLAINTEXT,	\
-			  DIGEST, SIGNATURE )				\
+#define PUBKEY_SIGN_TEST( name, PUBKEY, PRIVATE, PUBLIC, RANDOM,	\
+			  PLAINTEXT, DIGEST, SIGNATURE )		\
 	static const uint8_t name ## _private[] = PRIVATE;		\
 	static const uint8_t name ## _public[] = PUBLIC;		\
+	static const uint8_t name ## _random[] = RANDOM;		\
 	static const uint8_t name ## _plaintext[] = PLAINTEXT;		\
 	static const uint8_t name ## _signature[] = SIGNATURE;		\
 	static struct pubkey_sign_test name = {				\
@@ -124,6 +136,8 @@ struct pubkey_sign_test {
 			.data = name ## _public,			\
 			.len = sizeof ( name ## _public ),		\
 		},							\
+		.random = name ## _random,				\
+		.random_len = sizeof ( name ## _random ),		\
 		.plaintext = name ## _plaintext,			\
 		.plaintext_len = sizeof ( name ## _plaintext ),		\
 		.digest = DIGEST,					\
@@ -133,6 +147,7 @@ struct pubkey_sign_test {
 		},							\
 	}
 
+extern int pubkey_test_get_random ( void *data, size_t len );
 extern void pubkey_okx ( struct pubkey_test *test,
 			 const char *file, unsigned int line );
 extern void pubkey_sign_okx ( struct pubkey_sign_test *test,

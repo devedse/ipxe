@@ -2,6 +2,7 @@
 #define _BITS_COMPILER_H
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** Dummy relocation type */
 #define RELOC_TYPE_NONE R_LARCH_NONE
@@ -9,7 +10,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #ifndef ASSEMBLY
 
 /** Unprefixed constant operand modifier */
-#define ASM_NO_PREFIX "a"
+#define ASM_NO_PREFIX ""
 
 #define __asmcall
 #define __libgcc

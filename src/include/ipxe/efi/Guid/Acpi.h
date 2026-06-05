@@ -13,10 +13,10 @@
 
 **/
 
-#ifndef __ACPI_GUID_H__
-#define __ACPI_GUID_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define ACPI_TABLE_GUID \
   { \
@@ -38,5 +38,3 @@ FILE_LICENCE ( BSD2_PATENT );
 extern EFI_GUID  gEfiAcpiTableGuid;
 extern EFI_GUID  gEfiAcpi10TableGuid;
 extern EFI_GUID  gEfiAcpi20TableGuid;
-
-#endif

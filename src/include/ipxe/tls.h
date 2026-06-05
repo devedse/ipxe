@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/refcnt.h>
@@ -81,6 +82,9 @@ struct tls_header {
 #define TLS_ALERT_WARNING 1
 #define TLS_ALERT_FATAL 2
 
+/* TLS alert descriptions */
+#define TLS_ALERT_CLOSE_NOTIFY 0
+
 /* TLS cipher specifications */
 #define TLS_RSA_WITH_NULL_MD5 0x0001
 #define TLS_RSA_WITH_NULL_SHA 0x0002
@@ -96,23 +100,35 @@ struct tls_header {
 #define TLS_RSA_WITH_AES_256_GCM_SHA384 0x009d
 #define TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 0x009e
 #define TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 0x009f
+#define TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA 0xc009
+#define TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA 0xc00a
 #define TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA 0xc013
 #define TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA 0xc014
+#define TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 0xc023
+#define TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 0xc024
 #define TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 0xc027
 #define TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 0xc028
+#define TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 0xc02b
+#define TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 0xc02c
 #define TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 0xc02f
 #define TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 0xc030
 
-/* TLS hash algorithm identifiers */
-#define TLS_MD5_ALGORITHM 1
-#define TLS_SHA1_ALGORITHM 2
-#define TLS_SHA224_ALGORITHM 3
-#define TLS_SHA256_ALGORITHM 4
-#define TLS_SHA384_ALGORITHM 5
-#define TLS_SHA512_ALGORITHM 6
-
-/* TLS signature algorithm identifiers */
-#define TLS_RSA_ALGORITHM 1
+/* TLS signature hash algorithm identifiers */
+#define TLS_RSA_SHA1_ALGORITHM 0x0201
+#define TLS_RSA_SHA224_ALGORITHM 0x0301
+#define TLS_ECDSA_SHA224_ALGORITHM 0x0303
+#define TLS_RSA_SHA256_ALGORITHM 0x0401
+#define TLS_ECDSA_SHA256_ALGORITHM 0x0403
+#define TLS_RSA_SHA384_ALGORITHM 0x0501
+#define TLS_ECDSA_SHA384_ALGORITHM 0x0503
+#define TLS_RSA_SHA512_ALGORITHM 0x0601
+#define TLS_ECDSA_SHA512_ALGORITHM 0x0603
+#define TLS_RSA_PSS_RSAE_SHA256_ALGORITHM 0x0804
+#define TLS_RSA_PSS_RSAE_SHA384_ALGORITHM 0x0805
+#define TLS_RSA_PSS_RSAE_SHA512_ALGORITHM 0x0806
+#define TLS_RSA_PSS_PSS_SHA256_ALGORITHM 0x0809
+#define TLS_RSA_PSS_PSS_SHA384_ALGORITHM 0x080a
+#define TLS_RSA_PSS_PSS_SHA512_ALGORITHM 0x080b
 
 /* TLS server name extension */
 #define TLS_SERVER_NAME 0
@@ -268,22 +284,16 @@ struct tls_cipherspec_pair {
 	struct tls_cipherspec pending;
 };
 
-/** A TLS signature and hash algorithm identifier */
-struct tls_signature_hash_id {
-	/** Hash algorithm */
-	uint8_t hash;
-	/** Signature algorithm */
-	uint8_t signature;
-} __attribute__ (( packed ));
-
 /** A TLS signature algorithm */
 struct tls_signature_hash_algorithm {
 	/** Digest algorithm */
 	struct digest_algorithm *digest;
 	/** Public-key algorithm */
 	struct pubkey_algorithm *pubkey;
-	/** Numeric code */
-	struct tls_signature_hash_id code;
+	/** Required certificate OID-identified algorithm */
+	struct asn1_algorithm *algorithm;
+	/** Numeric code (in network-endian order) */
+	uint16_t code;
 };
 
 /** TLS signature hash algorithm table
@@ -301,33 +311,9 @@ struct tls_signature_hash_algorithm {
 
 /** TLS client random data */
 struct tls_client_random {
-	/** GMT Unix time */
-	uint32_t gmt_unix_time;
 	/** Random data */
-	uint8_t random[28];
+	uint8_t random[32];
 } __attribute__ (( packed ));
-
-/** An MD5+SHA1 context */
-struct md5_sha1_context {
-	/** MD5 context */
-	uint8_t md5[MD5_CTX_SIZE];
-	/** SHA-1 context */
-	uint8_t sha1[SHA1_CTX_SIZE];
-} __attribute__ (( packed ));
-
-/** MD5+SHA1 context size */
-#define MD5_SHA1_CTX_SIZE sizeof ( struct md5_sha1_context )
-
-/** An MD5+SHA1 digest */
-struct md5_sha1_digest {
-	/** MD5 digest */
-	uint8_t md5[MD5_DIGEST_SIZE];
-	/** SHA-1 digest */
-	uint8_t sha1[SHA1_DIGEST_SIZE];
-} __attribute__ (( packed ));
-
-/** MD5+SHA1 digest size */
-#define MD5_SHA1_DIGEST_SIZE sizeof ( struct md5_sha1_digest )
 
 /** A TLS session */
 struct tls_session {
@@ -414,6 +400,8 @@ struct tls_server {
 	struct x509_root *root;
 	/** Certificate chain */
 	struct x509_chain *chain;
+	/** Public key algorithm (within server certificate) */
+	struct asn1_algorithm *algorithm;
 	/** Public key (within server certificate) */
 	struct asn1_cursor key;
 	/** Certificate validator */

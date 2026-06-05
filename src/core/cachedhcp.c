@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/netdevice.h>
 #include <ipxe/vlan.h>
 #include <ipxe/uaccess.h>
+#include <ipxe/uri.h>
 #include <ipxe/cachedhcp.h>
 
 /** @file
@@ -170,6 +172,9 @@ static int cachedhcp_apply ( struct cached_dhcp_packet *cache,
 		settings = netdev_settings ( netdev );
 		DBGC ( colour, "CACHEDHCP %s is for %s\n",
 		       cache->name, netdev->name );
+
+		/* Mark network device to be opened automatically */
+		netdev->state |= NETDEV_AUTO_OPEN;
 	}
 
 	/* Register settings */
@@ -191,6 +196,50 @@ static int cachedhcp_apply ( struct cached_dhcp_packet *cache,
 }
 
 /**
+ * Get URI from cached DHCP packet
+ *
+ * @v cache		Cached DHCP packet
+ * @ret uri		URI, or NULL if not defined
+ */
+static struct uri * cachedhcp_uri ( struct cached_dhcp_packet *cache ) {
+	struct dhcp_packet *dhcppkt = cache->dhcppkt;
+	struct settings *settings = &dhcppkt->settings;
+	struct uri *uri = NULL;
+	union {
+		struct sockaddr sa;
+		struct sockaddr_in sin;
+	} next_server;
+	char *filename;
+
+	/* Fetch next-server address */
+	memset ( &next_server, 0, sizeof ( next_server ) );
+	next_server.sin.sin_family = AF_INET;
+	fetch_ipv4_setting ( settings, &next_server_setting,
+			     &next_server.sin.sin_addr );
+	if ( next_server.sin.sin_addr.s_addr ) {
+		DBGC ( colour, "CACHEDHCP %s has next-server %s\n",
+		       cache->name, inet_ntoa ( next_server.sin.sin_addr ) );
+	}
+
+	/* Fetch filename */
+	fetch_string_setting_copy ( settings, &filename_setting, &filename );
+	if ( ! filename )
+		goto err_filename;
+	DBGC ( colour, "CACHEDHCP %s has filename %s\n",
+	       cache->name, filename );
+
+	/* Construct URI */
+	uri = pxe_uri ( &next_server.sa, filename );
+	if ( ! uri )
+		goto err_uri;
+
+ err_uri:
+	free ( filename );
+ err_filename:
+	return uri;
+}
+
+/**
  * Record cached DHCP packet
  *
  * @v cache		Cached DHCP packet
@@ -204,6 +253,7 @@ int cachedhcp_record ( struct cached_dhcp_packet *cache, unsigned int vlan,
 	struct dhcp_packet *dhcppkt;
 	struct dhcp_packet *tmp;
 	struct dhcphdr *dhcphdr;
+	struct uri *uri;
 	unsigned int i;
 	size_t len;
 
@@ -256,6 +306,12 @@ int cachedhcp_record ( struct cached_dhcp_packet *cache, unsigned int vlan,
 	       virt_to_phys ( data ), len, max_len );
 	cache->dhcppkt = dhcppkt;
 	cache->vlan = vlan;
+
+	/* Set current working URI, if defined in this packet */
+	uri = cachedhcp_uri ( cache );
+	if ( uri )
+		churi ( uri );
+	uri_put ( uri );
 
 	return 0;
 }

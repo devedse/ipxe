@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -479,7 +480,8 @@ static int form_loop ( struct form *form ) {
 			break;
 		default:
 			/* Move to input with matching shortcut key, if any */
-			item = dynui_shortcut ( form->dynui, key );
+			item = dynui_shortcut ( form->dynui, key,
+						scroll->current );
 			if ( item ) {
 				scroll->current = item->index;
 				if ( ! item->name )

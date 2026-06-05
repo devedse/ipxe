@@ -12,10 +12,10 @@
 
 **/
 
-#ifndef __EFI_DNS4_PROTOCOL_H__
-#define __EFI_DNS4_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_DNS4_SERVICE_BINDING_PROTOCOL_GUID \
   { \
@@ -534,5 +534,3 @@ struct _EFI_DNS4_PROTOCOL {
 
 extern EFI_GUID  gEfiDns4ServiceBindingProtocolGuid;
 extern EFI_GUID  gEfiDns4ProtocolGuid;
-
-#endif

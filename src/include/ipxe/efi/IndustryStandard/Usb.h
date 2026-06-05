@@ -8,10 +8,10 @@
 
 **/
 
-#ifndef __USB_H__
-#define __USB_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 //
 // Subset of Class and Subclass definitions from USB Specs
@@ -395,5 +395,3 @@ typedef struct hid_descriptor {
 } EFI_USB_HID_DESCRIPTOR;
 
 #pragma pack()
-
-#endif

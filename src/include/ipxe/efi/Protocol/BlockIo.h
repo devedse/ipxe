@@ -9,10 +9,10 @@
 
 **/
 
-#ifndef __BLOCK_IO_H__
-#define __BLOCK_IO_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_BLOCK_IO_PROTOCOL_GUID \
   { \
@@ -232,5 +232,3 @@ struct _EFI_BLOCK_IO_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiBlockIoProtocolGuid;
-
-#endif

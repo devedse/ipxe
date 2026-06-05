@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <ipxe/uuid.h>
@@ -62,6 +63,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/efi/Protocol/Mtftp4.h>
 #include <ipxe/efi/Protocol/Mtftp6.h>
 #include <ipxe/efi/Protocol/NetworkInterfaceIdentifier.h>
+#include <ipxe/efi/Protocol/PartitionInfo.h>
 #include <ipxe/efi/Protocol/PciIo.h>
 #include <ipxe/efi/Protocol/PciRootBridgeIo.h>
 #include <ipxe/efi/Protocol/PxeBaseCode.h>
@@ -306,6 +308,10 @@ EFI_GUID efi_nii_protocol_guid
 /** Network interface identifier protocol GUID (new version) */
 EFI_GUID efi_nii31_protocol_guid
 	= EFI_NETWORK_INTERFACE_IDENTIFIER_PROTOCOL_GUID_31;
+
+/** Partition information protocol GUID */
+EFI_GUID efi_partition_info_protocol_guid
+	= EFI_PARTITION_INFO_PROTOCOL_GUID;
 
 /** PCI I/O protocol GUID */
 EFI_GUID efi_pci_io_protocol_guid
@@ -638,6 +644,8 @@ static struct efi_well_known_guid efi_well_known_guids[] = {
 	  "Nii" },
 	{ &efi_nii31_protocol_guid,
 	  "Nii31" },
+	{ &efi_partition_info_protocol_guid,
+	  "PartitionInfo" },
 	{ &efi_pci_io_protocol_guid,
 	  "PciIo" },
 	{ &efi_pci_root_bridge_io_protocol_guid,

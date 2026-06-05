@@ -13,10 +13,10 @@
 
 **/
 
-#ifndef __EFI_MTFTP6_PROTOCOL_H__
-#define __EFI_MTFTP6_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_MTFTP6_SERVICE_BINDING_PROTOCOL_GUID \
   { \
@@ -816,5 +816,3 @@ struct _EFI_MTFTP6_PROTOCOL {
 
 extern EFI_GUID  gEfiMtftp6ServiceBindingProtocolGuid;
 extern EFI_GUID  gEfiMtftp6ProtocolGuid;
-
-#endif

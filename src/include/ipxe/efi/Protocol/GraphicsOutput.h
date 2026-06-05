@@ -8,10 +8,10 @@
 
 **/
 
-#ifndef __GRAPHICS_OUTPUT_H__
-#define __GRAPHICS_OUTPUT_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID \
   { \
@@ -268,5 +268,3 @@ struct _EFI_GRAPHICS_OUTPUT_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiGraphicsOutputProtocolGuid;
-
-#endif

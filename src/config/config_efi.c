@@ -20,6 +20,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/general.h>
 #include <config/console.h>
@@ -46,6 +47,10 @@ REQUIRE_OBJECT ( efi_fbcon );
 #ifdef CONSOLE_FRAMEBUFFER
 REQUIRE_OBJECT ( efi_fbcon );
 #endif
+#ifdef CONSOLE_DISKLOG
+REQUIRE_OBJECT ( efi_disklog );
+#endif
+
 #ifdef DOWNLOAD_PROTO_FILE
 REQUIRE_OBJECT ( efi_local );
 #endif

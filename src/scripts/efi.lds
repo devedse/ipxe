@@ -94,6 +94,19 @@ SECTIONS {
     }
 
     /*
+     * The SBOM section
+     *
+     */
+
+    . = ALIGN ( _page_align );
+    .sbom : {
+	_sbom = .;
+	KEEP(*(.sbom))
+	KEEP(*(.sbom.*))
+	_esbom = .;
+    }
+
+    /*
      * Weak symbols that need zero values if not otherwise defined
      *
      */
@@ -105,6 +118,16 @@ SECTIONS {
 	_eweak = .;
     }
     _assert = ASSERT ( ( _weak == _eweak ), ".weak is non-zero length" );
+
+    /*
+     * iPXE-specific note sections
+     *
+     */
+
+    .note : {
+	*(.note.ipxe)
+	*(.note.ipxe.*)
+    }
 
     /*
      * Dispose of the comment and note sections to make the link map

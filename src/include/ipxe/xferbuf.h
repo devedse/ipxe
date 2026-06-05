@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/iobuf.h>
@@ -20,6 +21,8 @@ struct xfer_buffer {
 	void *data;
 	/** Size of data */
 	size_t len;
+	/** Maximum required size of data */
+	size_t max;
 	/** Current offset within data */
 	size_t pos;
 	/** Data transfer buffer operations */

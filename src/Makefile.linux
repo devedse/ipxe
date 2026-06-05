@@ -19,12 +19,17 @@ LDFLAGS		+= -r -d
 # Source directories
 #
 SRCDIRS		+= drivers/linux
+SRCDIRS		+= drivers/net/linux
 SRCDIRS		+= interface/linux
 NON_AUTO_SRCS	+= interface/linux/linux_api.c
 
 # Media types
 #
 NON_AUTO_MEDIA = linux
+
+# Include Linux-specific drivers in all-drivers build
+#
+DRIVERS_ipxe	+= $(DRIVERS_linux_net)
 
 # Compiler flags for building host API wrapper
 #
@@ -36,6 +41,13 @@ endif
 ifneq ($(NO_WERROR),1)
 LINUX_CFLAGS	+= -Werror
 endif
+
+# Check for implicit libatomic
+#
+LIBATOMIC_TEST = $(CC) $(LINUX_CFLAGS) -x c /dev/null -nostartfiles \
+		      -fno-link-libatomic -o /dev/null >/dev/null 2>&1
+LIBATOMIC_FLAGS	:= $(shell $(LIBATOMIC_TEST) && $(ECHO) '-fno-link-libatomic')
+LINUX_CFLAGS	+= $(LIBATOMIC_FLAGS)
 
 # Check for libslirp
 #

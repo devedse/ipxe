@@ -27,6 +27,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <string.h>
 #include <errno.h>
 #include <ipxe/console.h>
+#include <ipxe/disklog.h>
 #include <ipxe/init.h>
 #include <realmode.h>
 #include <int13.h>
@@ -38,7 +39,13 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
-/* Set default console usage if applicable */
+/* Set default console usage if applicable
+ *
+ * We accept either CONSOLE_DISKLOG or CONSOLE_INT13.
+ */
+#if ( defined ( CONSOLE_DISKLOG ) && ! defined ( CONSOLE_INT13 ) )
+#define CONSOLE_INT13 CONSOLE_DISKLOG
+#endif
 #if ! ( defined ( CONSOLE_INT13 ) && CONSOLE_EXPLICIT ( CONSOLE_INT13 ) )
 #undef CONSOLE_INT13
 #define CONSOLE_INT13 ( CONSOLE_USAGE_ALL & ~CONSOLE_USAGE_LOG )
@@ -46,21 +53,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** Disk drive number */
 #define INT13CON_DRIVE 0x80
-
-/** Log partition type */
-#define INT13CON_PARTITION_TYPE 0xe0
-
-/** Maximum number of outstanding unwritten characters */
-#define INT13CON_MAX_UNWRITTEN 64
-
-/** Log partition header */
-struct int13con_header {
-	/** Magic signature */
-	char magic[10];
-} __attribute__ (( packed ));
-
-/** Log partition magic signature */
-#define INT13CON_MAGIC "iPXE LOG\n\n"
 
 /** Original INT13 vector */
 static struct segoff __bss16 ( int13con_vector );
@@ -74,17 +66,8 @@ static uint8_t __bss16_array ( int13con_buffer, [INT13_BLKSIZE] );
 static struct int13_disk_address __bss16 ( int13con_address );
 #define int13con_address __use_data16 ( int13con_address )
 
-/** Current LBA */
-static uint64_t int13con_lba;
-
-/** Maximum LBA */
-static uint64_t int13con_max_lba;
-
-/** Current offset within sector */
-static size_t int13con_offset;
-
-/** Number of unwritten characters */
-static size_t int13con_unwritten;
+/** Disk log */
+static struct disklog int13con_disklog;
 
 struct console_driver int13con __console_driver;
 
@@ -125,56 +108,30 @@ static int int13con_rw ( unsigned int op, uint64_t lba ) {
 }
 
 /**
+ * Write current logical block
+ *
+ * @ret rc		Return status code
+ */
+static int int13con_write ( void ) {
+
+	/* Write block */
+	return int13con_rw ( INT13_EXTENDED_WRITE, int13con_disklog.lba );
+}
+
+/** INT13 disk log operations */
+static struct disklog_operations int13con_op = {
+	.write = int13con_write,
+};
+
+/**
  * Write character to console
  *
  * @v character		Character
  */
 static void int13con_putchar ( int character ) {
-	static int busy;
-	int rc;
 
-	/* Ignore if we are already mid-logging */
-	if ( busy )
-		return;
-	busy = 1;
-
-	/* Write character to buffer */
-	int13con_buffer[int13con_offset++] = character;
-	int13con_unwritten++;
-
-	/* Write sector to disk, if applicable */
-	if ( ( int13con_offset == INT13_BLKSIZE ) ||
-	     ( int13con_unwritten == INT13CON_MAX_UNWRITTEN ) ||
-	     ( character == '\n' ) ) {
-
-		/* Write sector to disk */
-		if ( ( rc = int13con_rw ( INT13_EXTENDED_WRITE,
-					  int13con_lba ) ) != 0 ) {
-			DBG ( "INT13CON could not write log\n" );
-			/* Ignore and continue; there's nothing we can do */
-		}
-
-		/* Reset count of unwritten characters */
-		int13con_unwritten = 0;
-	}
-
-	/* Move to next sector, if applicable */
-	if ( int13con_offset == INT13_BLKSIZE ) {
-
-		/* Disable console if we have run out of space */
-		if ( int13con_lba >= int13con_max_lba )
-			int13con.disabled = 1;
-
-		/* Clear log buffer */
-		memset ( int13con_buffer, 0, sizeof ( int13con_buffer ) );
-		int13con_offset = 0;
-
-		/* Move to next sector */
-		int13con_lba++;
-	}
-
-	/* Clear busy flag */
-	busy = 0;
+	/* Write character */
+	disklog_putchar ( &int13con_disklog, character );
 }
 
 /**
@@ -185,8 +142,6 @@ static void int13con_putchar ( int character ) {
 static int int13con_find ( void ) {
 	struct master_boot_record *mbr =
 		( ( struct master_boot_record * ) int13con_buffer );
-	struct int13con_header *hdr =
-		( ( struct int13con_header * ) int13con_buffer );
 	struct partition_table_entry part[4];
 	unsigned int i;
 	int rc;
@@ -209,7 +164,7 @@ static int int13con_find ( void ) {
 	for ( i = 0 ; i < ( sizeof ( part ) / sizeof ( part[0] ) ) ; i++ ) {
 
 		/* Skip partitions of the wrong type */
-		if ( part[i].type != INT13CON_PARTITION_TYPE )
+		if ( part[i].type != DISKLOG_PARTITION_TYPE )
 			continue;
 
 		/* Read partition header */
@@ -220,24 +175,22 @@ static int int13con_find ( void ) {
 			continue;
 		}
 
-		/* Check partition header */
-		if ( memcmp ( hdr->magic, INT13CON_MAGIC,
-			      sizeof ( hdr->magic ) ) != 0 ) {
-			DBG ( "INT13CON partition %d bad magic\n", ( i + 1 ) );
-			DBG2_HDA ( 0, hdr, sizeof ( *hdr ) );
+		/* Initialise disk log console */
+		disklog_init ( &int13con_disklog, &int13con_op, &int13con,
+			       int13con_buffer, INT13_BLKSIZE, part[i].start,
+			       ( part[i].start + part[i].length - 1 ) );
+
+		/* Open disk log console */
+		if ( ( rc = disklog_open ( &int13con_disklog ) ) != 0 ) {
+			DBG ( "INT13CON partition %d could not initialise: "
+			      "%s\n", ( i + 1 ), strerror ( rc ) );
 			continue;
 		}
 
 		/* Found log partition */
-		DBG ( "INT13CON partition %d at [%08x,%08x)\n", ( i + 1 ),
-		      part[i].start, ( part[i].start + part[i].length ) );
-		int13con_lba = part[i].start;
-		int13con_max_lba = ( part[i].start + part[i].length - 1 );
-
-		/* Initialise log buffer */
-		memset ( &int13con_buffer[ sizeof ( *hdr ) ], 0,
-			 ( sizeof ( int13con_buffer ) - sizeof ( *hdr ) ) );
-		int13con_offset = sizeof ( hdr->magic );
+		DBG ( "INT13CON partition %d at [%08llx,%08llx)\n", ( i + 1 ),
+		      ( ( unsigned long long ) int13con_disklog.lba ),
+		      ( ( unsigned long long ) int13con_disklog.max_lba ) );
 
 		return 0;
 	}
@@ -298,3 +251,7 @@ struct console_driver int13con __console_driver = {
 	.disabled = CONSOLE_DISABLED,
 	.usage = CONSOLE_INT13,
 };
+
+/* Request a log partition from genfsimg */
+__asm__ ( ".globl ipxe_oem_info_disklog\n\t"
+	  ".equ ipxe_oem_info_disklog, 0x0001\n\t" );

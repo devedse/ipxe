@@ -8,10 +8,10 @@
 
 **/
 
-#ifndef __SIMPLE_POINTER_H__
-#define __SIMPLE_POINTER_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_SIMPLE_POINTER_PROTOCOL_GUID \
   { \
@@ -135,5 +135,3 @@ struct _EFI_SIMPLE_POINTER_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiSimplePointerProtocolGuid;
-
-#endif

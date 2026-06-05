@@ -22,7 +22,9 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
+#include <byteswap.h>
 #include <ipxe/rsa.h>
 #include <ipxe/sha512.h>
 #include <ipxe/asn1.h>
@@ -53,10 +55,26 @@ struct rsa_digestinfo_prefix rsa_sha384_prefix __rsa_digestinfo_prefix = {
 
 /** RSA with SHA-384 signature hash algorithm */
 struct tls_signature_hash_algorithm tls_rsa_sha384 __tls_sig_hash_algorithm = {
-	.code = {
-		.signature = TLS_RSA_ALGORITHM,
-		.hash = TLS_SHA384_ALGORITHM,
-	},
+	.code = htons ( TLS_RSA_SHA384_ALGORITHM ),
+	.algorithm = &rsa_encryption_algorithm,
 	.pubkey = &rsa_algorithm,
+	.digest = &sha384_algorithm,
+};
+
+/** RSA-PSS with rsaEncryption OID and SHA-384 signature hash algorithm */
+struct tls_signature_hash_algorithm
+tls_rsa_pss_rsae_sha384 __tls_sig_hash_algorithm = {
+	.code = htons ( TLS_RSA_PSS_RSAE_SHA384_ALGORITHM ),
+	.algorithm = &rsa_encryption_algorithm,
+	.pubkey = &rsa_pss_algorithm,
+	.digest = &sha384_algorithm,
+};
+
+/** RSA-PSS with RSASSA-PSS OID and SHA-384 signature hash algorithm */
+struct tls_signature_hash_algorithm
+tls_rsa_pss_pss_sha384 __tls_sig_hash_algorithm = {
+	.code = htons ( TLS_RSA_PSS_PSS_SHA384_ALGORITHM ),
+	.algorithm = &rsassa_pss_algorithm,
+	.pubkey = &rsa_pss_algorithm,
 	.digest = &sha384_algorithm,
 };

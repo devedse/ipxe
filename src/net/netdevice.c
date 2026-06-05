@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -834,6 +835,10 @@ int register_netdev ( struct net_device *netdev ) {
 			goto err_probe;
 		}
 	}
+
+	/* Attempt to open device automatically, if applicable */
+	if ( netdev->state & NETDEV_AUTO_OPEN )
+		netdev_open ( netdev );
 
 	return 0;
 
