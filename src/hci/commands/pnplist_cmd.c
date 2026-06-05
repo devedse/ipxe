@@ -432,29 +432,33 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	 * reconstruct here).
 	 */
 	if ( buffer && store ) {
+		/* dsn_hi/dsn_lo are intentionally omitted: instance == hi+lo+"00"
+		 * already, so emitting them too would just duplicate data. */
 		n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-			       "&%s_dsn_present=%d&%s_dsn_hi=%08X&%s_dsn_lo=%08X&%s_instance=%s",
+			       "&%s_dsn_present=%d&%s_instance=%s",
 			       netdev->name, dsn_present,
-			       netdev->name, dsn_hi,
-			       netdev->name, dsn_lo,
 			       netdev->name, instance );
 		if ( n > 0 )
 			pos += n;
 	}
 
-	/* Build and emit the PCI bridge chain (root -> NIC) so the host can
-	 * reconstruct the no-DSN, location-based Windows instance ID offline.
-	 * Each hop carries the Windows hardware-id fields plus its own devfn
-	 * byte; the host assembles and hashes these.  We walk from the NIC up
-	 * to a device on bus 0, following each bridge's secondary bus number.
-	 * hops[0] is the NIC (leaf); hops[nhops-1] is the device on the root
-	 * bus.  We emit chain index 0 = root-bus device, last = NIC.  An
-	 * incomplete walk (topology gap) emits chain_count=0 so the host keeps
-	 * its current behaviour instead of injecting a wrong ID. */
+	/* Build and emit the NIC's PCI bridge chain so the host can reconstruct
+	 * the no-DSN, location-based Windows instance ID offline.  We walk from
+	 * the NIC up to a device on bus 0, following each bridge's secondary bus
+	 * number, then emit ONLY the ancestor bridges (root-bus bridge first,
+	 * immediate parent bridge last).  The NIC itself is NOT repeated here -
+	 * it is already fully described by netN_ven/dev/subsys/rev/bus_loc, and
+	 * the host appends it from those.  Each bridge carries its Windows
+	 * hardware-id fields plus its own devfn byte; the host assembles and
+	 * hashes these.  netN_chain_complete signals whether the walk reached
+	 * the root bus: 1 means the chain (even if it has zero bridges, i.e. the
+	 * NIC sits on the root bus) is trustworthy; 0 means a topology gap, so
+	 * the host keeps the package's instance ID instead of a wrong one. */
 	{
 		struct pnp_hop hops[PNP_MAX_HOPS];
 		int nhops = 0;
 		int reached_root = 0;
+		int nbridges;
 		int i;
 		struct pci_device cur;
 		struct pci_device parent;
@@ -470,15 +474,18 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 				break;
 			memcpy ( &cur, &parent, sizeof ( cur ) );
 		}
-		if ( ! reached_root )
-			nhops = 0;
+		/* hops[0] is the NIC; hops[1..nhops-1] are the bridges. */
+		nbridges = ( reached_root && nhops > 0 ) ? ( nhops - 1 ) : 0;
 
 		if ( buffer && store ) {
 			n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
-				       "&%s_chain_count=%d", netdev->name, nhops );
+				       "&%s_chain_complete=%d", netdev->name,
+				       ( reached_root ? 1 : 0 ) );
 			if ( n > 0 )
 				pos += n;
-			for ( i = 0 ; i < nhops ; i++ ) {
+			for ( i = 0 ; i < nbridges ; i++ ) {
+				/* chain index 0 = bus-0 bridge (hops[nhops-1]) ...
+				 * index nbridges-1 = immediate parent (hops[1]). */
 				struct pnp_hop *h = &hops[ nhops - 1 - i ];
 				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
 					       "&%s_chain%d_ven=0x%04x&%s_chain%d_dev=0x%04x"
@@ -494,11 +501,12 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 					pos += n;
 			}
 		} else {
-			printf ( "DEBUG: %s instance-id chain: %d hop(s) root->leaf\n",
-				 netdev->name, nhops );
-			for ( i = 0 ; i < nhops ; i++ ) {
+			printf ( "DEBUG: %s instance-id chain: complete=%d, %d bridge(s) "
+				 "root->parent (NIC excluded)\n",
+				 netdev->name, ( reached_root ? 1 : 0 ), nbridges );
+			for ( i = 0 ; i < nbridges ; i++ ) {
 				struct pnp_hop *h = &hops[ nhops - 1 - i ];
-				printf ( "  chain[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X\n",
+				printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X\n",
 					 i, h->vendor, h->device, h->subsys_device,
 					 h->subsys_vendor, h->revision, h->devfn );
 			}
