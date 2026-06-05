@@ -312,19 +312,11 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 		}
 	}
 
-	/* Try to read subsystem vendor ID */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
-	printf ( "DEBUG: Read subsystem vendor ID: rc=%d value=0x%04x\n", rc, subsys_vendor );
-	if ( rc != 0 ) {
-		subsys_vendor = 0x0000;
-	}
-
-	/* Try to read subsystem device ID */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
-	printf ( "DEBUG: Read subsystem device ID: rc=%d value=0x%04x\n", rc, subsys_device );
-	if ( rc != 0 ) {
-		subsys_device = 0x0000;
-	}
+	/* Read subsystem IDs via the shared helper, the same one the bridge chain
+	 * uses.  For the NIC (a normal type-0 device) it reads config 0x2c/0x2e. */
+	pnp_read_subsys ( pci, &subsys_vendor, &subsys_device );
+	printf ( "DEBUG: Read subsystem IDs: subsys_vendor=0x%04x subsys_device=0x%04x\n",
+		 subsys_vendor, subsys_device );
 
 	/* Try to read revision */
 	rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
@@ -456,26 +448,28 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	 * the host keeps the package's instance ID instead of a wrong one. */
 	{
 		struct pnp_hop hops[PNP_MAX_HOPS];
-		int nhops = 0;
+		int nbridges = 0;
 		int reached_root = 0;
-		int nbridges;
 		int i;
-		struct pci_device cur;
+		unsigned int bus = PCI_BUS ( pci->busdevfn );
 		struct pci_device parent;
 
-		memcpy ( &cur, pci, sizeof ( cur ) );
-		while ( nhops < PNP_MAX_HOPS ) {
-			pnp_fill_hop ( &cur, &hops[nhops++] );
-			if ( PCI_BUS ( cur.busdevfn ) == 0 ) {
+		/* Walk from the NIC's bus up to bus 0, recording ONLY the ancestor
+		 * bridges - the NIC's own identity is already emitted via netN_*, so we
+		 * never read it again here.  hops[0] = immediate parent bridge ...
+		 * hops[nbridges-1] = the bridge sitting on the root bus. */
+		while ( 1 ) {
+			if ( bus == 0 ) {
 				reached_root = 1;
 				break;
 			}
-			if ( ! pnp_find_parent_bridge ( PCI_BUS ( cur.busdevfn ), &parent ) )
+			if ( nbridges >= PNP_MAX_HOPS )
 				break;
-			memcpy ( &cur, &parent, sizeof ( cur ) );
+			if ( ! pnp_find_parent_bridge ( bus, &parent ) )
+				break;
+			pnp_fill_hop ( &parent, &hops[nbridges++] );
+			bus = PCI_BUS ( parent.busdevfn );
 		}
-		/* hops[0] is the NIC; hops[1..nhops-1] are the bridges. */
-		nbridges = ( reached_root && nhops > 0 ) ? ( nhops - 1 ) : 0;
 
 		if ( buffer && store ) {
 			n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
@@ -484,9 +478,9 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 			if ( n > 0 )
 				pos += n;
 			for ( i = 0 ; i < nbridges ; i++ ) {
-				/* chain index 0 = bus-0 bridge (hops[nhops-1]) ...
-				 * index nbridges-1 = immediate parent (hops[1]). */
-				struct pnp_hop *h = &hops[ nhops - 1 - i ];
+				/* chain index 0 = bus-0 bridge (hops[nbridges-1]) ...
+				 * index nbridges-1 = immediate parent (hops[0]). */
+				struct pnp_hop *h = &hops[ nbridges - 1 - i ];
 				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
 					       "&%s_chain%d_ven=0x%04x&%s_chain%d_dev=0x%04x"
 					       "&%s_chain%d_subsys_ven=0x%04x&%s_chain%d_subsys_dev=0x%04x"
@@ -505,7 +499,7 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 				 "root->parent (NIC excluded)\n",
 				 netdev->name, ( reached_root ? 1 : 0 ), nbridges );
 			for ( i = 0 ; i < nbridges ; i++ ) {
-				struct pnp_hop *h = &hops[ nhops - 1 - i ];
+				struct pnp_hop *h = &hops[ nbridges - 1 - i ];
 				printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X\n",
 					 i, h->vendor, h->device, h->subsys_device,
 					 h->subsys_vendor, h->revision, h->devfn );
