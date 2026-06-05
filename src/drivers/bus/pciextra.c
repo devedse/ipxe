@@ -80,6 +80,51 @@ int pci_find_next_capability ( struct pci_device *pci, int pos, int cap ) {
 }
 
 /**
+ * Look for a PCI Express extended capability
+ *
+ * @v pci		PCI device to query
+ * @v cap		Extended capability code
+ * @ret address		Address of capability, or 0 if not found
+ *
+ * Walk the PCI Express extended capability list (which begins at
+ * configuration space offset 0x100) and return the address of the
+ * requested extended capability structure, or 0 if the device does
+ * not support it.  This requires access to extended configuration
+ * space, which is available via ECAM or the EFI PCI I/O protocols.
+ */
+int pci_find_ext_capability ( struct pci_device *pci, int cap ) {
+	uint32_t header;
+	int pos = PCI_EXT_CAPABILITY_LIST;
+	/* Each extended capability is at least 8 bytes long, so this
+	 * bounds the number of list entries we are willing to follow.
+	 */
+	int ttl = ( ( 0x1000 - 0x100 ) / 8 );
+
+	/* Read the first extended capability header */
+	if ( pci_read_config_dword ( pci, pos, &header ) != 0 )
+		return 0;
+
+	/* A header of all-zeroes or all-ones means there is no
+	 * extended capability list (or extended config space is not
+	 * accessible).
+	 */
+	if ( ( header == 0 ) || ( header == 0xffffffff ) )
+		return 0;
+
+	while ( ttl-- > 0 ) {
+		if ( PCI_EXT_CAP_ID ( header ) == ( unsigned int ) cap )
+			return pos;
+		pos = PCI_EXT_CAP_NEXT ( header );
+		if ( pos < PCI_EXT_CAPABILITY_LIST )
+			break;
+		if ( pci_read_config_dword ( pci, pos, &header ) != 0 )
+			break;
+	}
+
+	return 0;
+}
+
+/**
  * Perform PCI Express function-level reset (FLR)
  *
  * @v pci		PCI device

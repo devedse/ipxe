@@ -146,6 +146,110 @@ static struct pci_device * get_real_pci_device ( struct net_device *netdev, int 
 	return NULL;
 }
 
+/** Maximum number of hops in a PCI instance-ID chain (root -> NIC) */
+#define PNP_MAX_HOPS 16
+
+/** One PCI device on the instance-ID chain (its Windows hardware-id fields + own devfn) */
+struct pnp_hop {
+	uint16_t vendor;
+	uint16_t device;
+	uint16_t subsys_vendor;
+	uint16_t subsys_device;
+	uint8_t revision;
+	uint8_t devfn;		/**< (slot << 3) | func == busdevfn & 0xff */
+};
+
+/**
+ * Read a device's subsystem IDs, honouring the header type.
+ *
+ * Type-0 (normal) devices carry the subsystem IDs at config 0x2c/0x2e.
+ * Type-1 (PCI-to-PCI bridge) devices do NOT; Windows takes a bridge's
+ * subsystem from the Subsystem ID / Subsystem Vendor ID capability
+ * (cap 0x0d), or uses 0x0000/0x0000 when that capability is absent.
+ * Getting this right matters: the host hashes the bridge's full hardware
+ * id, so a wrong subsystem here silently breaks the child's instance ID.
+ *
+ * @v pci		PCI device
+ * @v ssv		Subsystem vendor ID (returned)
+ * @v ssd		Subsystem device ID (returned)
+ */
+static void pnp_read_subsys ( struct pci_device *pci, uint16_t *ssv, uint16_t *ssd ) {
+	uint8_t hdr = 0;
+
+	*ssv = 0x0000;
+	*ssd = 0x0000;
+
+	pci_read_config_byte ( pci, PCI_HEADER_TYPE, &hdr );
+	if ( ( hdr & PCI_HEADER_TYPE_MASK ) == PCI_HEADER_TYPE_NORMAL ) {
+		pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, ssv );
+		pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, ssd );
+	} else {
+		int cap = pci_find_capability ( pci, PCI_CAP_ID_SSVID );
+		if ( cap ) {
+			pci_read_config_word ( pci, ( cap + 0x04 ), ssv );
+			pci_read_config_word ( pci, ( cap + 0x06 ), ssd );
+		}
+	}
+
+	/* Normalise "no device" (0xffff) to 0x0000, matching Windows */
+	if ( *ssv == 0xffff )
+		*ssv = 0x0000;
+	if ( *ssd == 0xffff )
+		*ssd = 0x0000;
+}
+
+/**
+ * Fill an instance-ID chain hop from a PCI device.
+ *
+ * @v pci		PCI device (with a valid busdevfn)
+ * @v hop		Hop descriptor to fill
+ */
+static void pnp_fill_hop ( struct pci_device *pci, struct pnp_hop *hop ) {
+	uint16_t ven = pci->vendor;
+	uint16_t dev = pci->device;
+	uint8_t rev = 0;
+
+	if ( ( ven == 0x0000 ) || ( ven == 0xffff ) )
+		pci_read_config_word ( pci, PCI_VENDOR_ID, &ven );
+	if ( ( dev == 0x0000 ) || ( dev == 0xffff ) )
+		pci_read_config_word ( pci, PCI_DEVICE_ID, &dev );
+	pci_read_config_byte ( pci, PCI_REVISION, &rev );
+
+	hop->vendor = ven;
+	hop->device = dev;
+	hop->revision = rev;
+	pnp_read_subsys ( pci, &hop->subsys_vendor, &hop->subsys_device );
+	hop->devfn = ( pci->busdevfn & 0xff );
+}
+
+/**
+ * Find the PCI-to-PCI bridge whose secondary bus number matches a target bus.
+ *
+ * This is the immediate parent bridge of any device on @c target_bus.
+ *
+ * @v target_bus	Secondary bus number to match
+ * @v out		PCI device to fill with the bridge on success
+ * @ret found		1 if a parent bridge was found, 0 otherwise
+ */
+static int pnp_find_parent_bridge ( unsigned int target_bus, struct pci_device *out ) {
+	struct pci_device scan;
+	uint32_t busdevfn = 0;
+	uint8_t hdr;
+	uint8_t sec;
+
+	while ( pci_find_next ( &scan, &busdevfn ) == 0 ) {
+		if ( ( pci_read_config_byte ( &scan, PCI_HEADER_TYPE, &hdr ) == 0 ) &&
+		     ( ( hdr & PCI_HEADER_TYPE_MASK ) == PCI_HEADER_TYPE_BRIDGE ) &&
+		     ( pci_read_config_byte ( &scan, PCI_SECONDARY, &sec ) == 0 ) &&
+		     ( sec == target_bus ) ) {
+			memcpy ( out, &scan, sizeof ( *out ) );
+			return 1;
+		}
+		busdevfn++;
+	}
+	return 0;
+}
+
 /**
  * Display Windows-style PNP device path for a network device
  *
@@ -165,6 +269,12 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	int need_free = 0;
 	size_t pos = 0;
 	int n;
+	int dsn_pos = 0;
+	uint32_t dsn_lo = 0, dsn_hi = 0;
+	int dsn_present = 0;
+	char instance[24];
+
+	instance[0] = '\0';
 
 	printf ( "\nDEBUG: ==== Processing device '%s' ====\n", netdev->name );
 
@@ -202,19 +312,11 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 		}
 	}
 
-	/* Try to read subsystem vendor ID */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
-	printf ( "DEBUG: Read subsystem vendor ID: rc=%d value=0x%04x\n", rc, subsys_vendor );
-	if ( rc != 0 ) {
-		subsys_vendor = 0x0000;
-	}
-
-	/* Try to read subsystem device ID */
-	rc = pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, &subsys_device );
-	printf ( "DEBUG: Read subsystem device ID: rc=%d value=0x%04x\n", rc, subsys_device );
-	if ( rc != 0 ) {
-		subsys_device = 0x0000;
-	}
+	/* Read subsystem IDs via the shared helper, the same one the bridge chain
+	 * uses.  For the NIC (a normal type-0 device) it reads config 0x2c/0x2e. */
+	pnp_read_subsys ( pci, &subsys_vendor, &subsys_device );
+	printf ( "DEBUG: Read subsystem IDs: subsys_vendor=0x%04x subsys_device=0x%04x\n",
+		 subsys_vendor, subsys_device );
 
 	/* Try to read revision */
 	rc = pci_read_config_byte ( pci, PCI_REVISION, &revision );
@@ -222,6 +324,35 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 	if ( rc != 0 ) {
 		revision = 0x00;
 	}
+
+	/* Try to read the PCI Express Device Serial Number (DSN).
+	 *
+	 * When present, Windows uses the DSN as the device instance ID
+	 * suffix, formatted as the upper dword followed by the lower
+	 * dword (each as 8 uppercase hex digits) followed by "00".  This
+	 * is the machine-specific value needed for offline driver
+	 * injection.  When the DSN is absent, Windows falls back to a
+	 * location-based instance ID that we cannot reconstruct here.
+	 */
+	dsn_pos = pci_find_ext_capability ( pci, PCI_EXT_CAP_DSN );
+	if ( dsn_pos ) {
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_LOWER ),
+					&dsn_lo );
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_UPPER ),
+					&dsn_hi );
+		/* Treat an all-zero or all-ones serial number as absent */
+		if ( ! ( ( ( dsn_lo == 0x00000000 ) &&
+			   ( dsn_hi == 0x00000000 ) ) ||
+			 ( ( dsn_lo == 0xffffffff ) &&
+			   ( dsn_hi == 0xffffffff ) ) ) ) {
+			dsn_present = 1;
+			snprintf ( instance, sizeof ( instance ),
+				   "%08X%08X00", dsn_hi, dsn_lo );
+		}
+	}
+	printf ( "DEBUG: DSN ext cap @0x%x present=%d hi=0x%08x lo=0x%08x "
+		 "instance=%s\n", dsn_pos, dsn_present, dsn_hi, dsn_lo,
+		 instance );
 
 	/* Display PNP device path in Windows format */
 	printf ( "DEBUG: Final values - vendor=0x%04x device=0x%04x subsys_vendor=0x%04x subsys_device=0x%04x rev=0x%02x\n", pci->vendor, pci->device, subsys_vendor, subsys_device, revision );
@@ -286,6 +417,96 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 		}
 	}
 
+	/* Append DSN / device instance ID fields to the stored output.
+	 * netN_instance is the ready-to-use Windows instance ID suffix
+	 * when a DSN is present; netN_dsn_present signals whether it is
+	 * valid (0 means Windows uses a location-based ID we cannot
+	 * reconstruct here).
+	 */
+	if ( buffer && store ) {
+		/* dsn_hi/dsn_lo are intentionally omitted: instance == hi+lo+"00"
+		 * already, so emitting them too would just duplicate data. */
+		n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+			       "&%s_dsn_present=%d&%s_instance=%s",
+			       netdev->name, dsn_present,
+			       netdev->name, instance );
+		if ( n > 0 )
+			pos += n;
+	}
+
+	/* Build and emit the NIC's PCI bridge chain so the host can reconstruct
+	 * the no-DSN, location-based Windows instance ID offline.  We walk from
+	 * the NIC up to a device on bus 0, following each bridge's secondary bus
+	 * number, then emit ONLY the ancestor bridges (root-bus bridge first,
+	 * immediate parent bridge last).  The NIC itself is NOT repeated here -
+	 * it is already fully described by netN_ven/dev/subsys/rev/bus_loc, and
+	 * the host appends it from those.  Each bridge carries its Windows
+	 * hardware-id fields plus its own devfn byte; the host assembles and
+	 * hashes these.  netN_chain_complete signals whether the walk reached
+	 * the root bus: 1 means the chain (even if it has zero bridges, i.e. the
+	 * NIC sits on the root bus) is trustworthy; 0 means a topology gap, so
+	 * the host keeps the package's instance ID instead of a wrong one. */
+	{
+		struct pnp_hop hops[PNP_MAX_HOPS];
+		int nbridges = 0;
+		int reached_root = 0;
+		int i;
+		unsigned int bus = PCI_BUS ( pci->busdevfn );
+		struct pci_device parent;
+
+		/* Walk from the NIC's bus up to bus 0, recording ONLY the ancestor
+		 * bridges - the NIC's own identity is already emitted via netN_*, so we
+		 * never read it again here.  hops[0] = immediate parent bridge ...
+		 * hops[nbridges-1] = the bridge sitting on the root bus. */
+		while ( 1 ) {
+			if ( bus == 0 ) {
+				reached_root = 1;
+				break;
+			}
+			if ( nbridges >= PNP_MAX_HOPS )
+				break;
+			if ( ! pnp_find_parent_bridge ( bus, &parent ) )
+				break;
+			pnp_fill_hop ( &parent, &hops[nbridges++] );
+			bus = PCI_BUS ( parent.busdevfn );
+		}
+
+		if ( buffer && store ) {
+			n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+				       "&%s_chain_complete=%d", netdev->name,
+				       ( reached_root ? 1 : 0 ) );
+			if ( n > 0 )
+				pos += n;
+			for ( i = 0 ; i < nbridges ; i++ ) {
+				/* chain index 0 = bus-0 bridge (hops[nbridges-1]) ...
+				 * index nbridges-1 = immediate parent (hops[0]). */
+				struct pnp_hop *h = &hops[ nbridges - 1 - i ];
+				n = snprintf ( buffer + pos, ( pos < len ) ? ( len - pos ) : 0,
+					       "&%s_chain%d_ven=0x%04x&%s_chain%d_dev=0x%04x"
+					       "&%s_chain%d_subsys_ven=0x%04x&%s_chain%d_subsys_dev=0x%04x"
+					       "&%s_chain%d_rev=0x%02x&%s_chain%d_devfn=%02x",
+					       netdev->name, i, h->vendor,
+					       netdev->name, i, h->device,
+					       netdev->name, i, h->subsys_vendor,
+					       netdev->name, i, h->subsys_device,
+					       netdev->name, i, h->revision,
+					       netdev->name, i, h->devfn );
+				if ( n > 0 )
+					pos += n;
+			}
+		} else {
+			printf ( "DEBUG: %s instance-id chain: complete=%d, %d bridge(s) "
+				 "root->parent (NIC excluded)\n",
+				 netdev->name, ( reached_root ? 1 : 0 ), nbridges );
+			for ( i = 0 ; i < nbridges ; i++ ) {
+				struct pnp_hop *h = &hops[ nbridges - 1 - i ];
+				printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X\n",
+					 i, h->vendor, h->device, h->subsys_device,
+					 h->subsys_vendor, h->revision, h->devfn );
+			}
+		}
+	}
+
 	/* Free allocated PCI device structure if needed */
 	if ( need_free ) {
 		free ( pci );
@@ -331,8 +552,10 @@ static int pnplist_exec ( int argc, char **argv ) {
 	/* Iterate through all network devices */
 	for_each_netdev ( netdev ) {
 		if ( opts.store ) {
-			/* Check if we need more buffer space */
-			while ( total_used + 512 >= output_len ) {
+			/* Check if we need more buffer space.  Reserve enough for
+			 * the base fields plus a full PCI bridge chain (up to
+			 * PNP_MAX_HOPS hops, ~200 bytes each). */
+			while ( total_used + 4096 >= output_len ) {
 				char *new_output;
 				output_len *= 2;
 				new_output = realloc ( output, output_len );
