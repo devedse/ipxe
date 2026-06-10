@@ -167,6 +167,31 @@
 /** @} */
 
 /**
+ * @defgroup ipxenote Macros to provide ELF notes
+ * @{
+ */
+
+/* Construct an iPXE-specific ELF note */
+#define IPXE_NOTE( type )					\
+	__asm__ ( ".section \".note.ipxe\", \"\", "		\
+		  _S2 ( ASM_TCHAR ) "note\n\t"			\
+		  /* Owner name length */			\
+		  ".long 4\n\t"					\
+		  /* Content length */				\
+		  ".long 0\n\t"					\
+		  /* Type */					\
+		  ".long " _S2 ( _C2 ( IPXE_NOTE_, type ) )	\
+		  "\n\t"					\
+		  /* Owner name */				\
+		  ".ascii \"iPXE\"\n\t"				\
+		  ".previous\n\t" )
+
+/** Build will use a disk-based console log, if present */
+#define IPXE_NOTE_DISKLOG 0x18aed109
+
+/** @} */
+
+/**
  * @defgroup objmacros Macros to provide or require explicit objects
  * @{
  */
@@ -899,6 +924,36 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
 
 /* This file itself is under GPLv2+/UBDL */
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+
+/**
+ * @defgroup secboot UEFI Secure Boot restrictions
+ *
+ * Not all files within the iPXE codebase are allowed to be included
+ * in UEFI Secure Boot signed builds.
+ *
+ * Files that are permitted in a UEFI Secure Boot build are subject to
+ * stricter code review requirements.  In particular, contributions
+ * from third parties may not be marked as permitted unless they have
+ * passed an approved security review.
+ *
+ * @{
+ */
+
+/** Declare a file as being permitted in a UEFI Secure Boot build */
+#define FILE_SECBOOT_PERMITTED \
+	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __secboot__permitted__ ) )
+
+/** Declare a file as being forbidden in a UEFI Secure Boot build */
+#define FILE_SECBOOT_FORBIDDEN \
+	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __secboot__forbidden__ ) )
+
+/** Declare a file's UEFI Secure Boot permission status */
+#define FILE_SECBOOT( _status ) FILE_SECBOOT_ ## _status
+
+/** @} */
+
+/* This file itself is permitted in a Secure Boot build */
+FILE_SECBOOT ( PERMITTED );
 
 #include <bits/compiler.h>
 

@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/device.h>
@@ -101,6 +102,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** Next capability */
 #define PCI_CAP_NEXT		0x01
+
+/** Capability length */
+#define PCI_CAP_LEN		0x02
 
 /** Start of PCI Express extended capability list */
 #define PCI_EXT_CAPABILITY_LIST	0x100
@@ -330,6 +334,7 @@ struct pci_driver {
 	PCI_SLOT ( (pci)->busdevfn ), PCI_FUNC ( (pci)->busdevfn )
 
 extern void adjust_pci_device ( struct pci_device *pci );
+extern int pci_bar_is_io ( struct pci_device *pci, unsigned int reg );
 extern unsigned long pci_bar_start ( struct pci_device *pci,
 				     unsigned int reg );
 extern void pci_bar_set ( struct pci_device *pci, unsigned int reg,

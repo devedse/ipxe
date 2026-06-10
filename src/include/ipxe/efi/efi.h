@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 /* EFI headers rudely redefine NULL */
 #undef NULL
@@ -81,6 +82,12 @@ struct efi_saved_tpl {
 	EFI_TPL current;
 	/** Previous external TPL */
 	EFI_TPL previous;
+};
+
+/** An EFI dropped task priority level */
+struct efi_dropped_tpl {
+	/** Current TPL */
+	EFI_TPL current;
 };
 
 /** An EFI protocol used by iPXE */
@@ -221,6 +228,7 @@ extern EFI_GUID efi_mtftp6_protocol_guid;
 extern EFI_GUID efi_mtftp6_service_binding_protocol_guid;
 extern EFI_GUID efi_nii_protocol_guid;
 extern EFI_GUID efi_nii31_protocol_guid;
+extern EFI_GUID efi_partition_info_protocol_guid;
 extern EFI_GUID efi_pci_io_protocol_guid;
 extern EFI_GUID efi_pci_root_bridge_io_protocol_guid;
 extern EFI_GUID efi_pxe_base_code_protocol_guid;
@@ -407,6 +415,8 @@ extern EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 			     EFI_SYSTEM_TABLE *systab );
 extern void efi_raise_tpl ( struct efi_saved_tpl *tpl );
 extern void efi_restore_tpl ( struct efi_saved_tpl *tpl );
+extern void efi_drop_tpl ( struct efi_dropped_tpl *tpl );
+extern void efi_undrop_tpl ( struct efi_dropped_tpl *tpl );
 extern int efi_open_untyped ( EFI_HANDLE handle, EFI_GUID *protocol,
 			      void **interface );
 extern int efi_open_unsafe_untyped ( EFI_HANDLE handle, EFI_GUID *protocol,

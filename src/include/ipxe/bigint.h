@@ -7,6 +7,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <assert.h>
 
@@ -28,8 +29,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * @ret size		Number of elements
  */
 #define bigint_required_size( len )					\
-	( ( (len) + sizeof ( bigint_element_t ) - 1 ) /			\
-	  sizeof ( bigint_element_t ) )
+	( (len) ? ( ( (len) + sizeof ( bigint_element_t ) - 1 ) /	\
+		    sizeof ( bigint_element_t ) ) : 1 )
 
 /**
  * Determine number of elements in big-integer type
@@ -357,11 +358,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * @v modulus		Big integer modulus
  * @ret len		Length of temporary working space
  */
-#define bigint_mod_exp_tmp_len( modulus ) ( {				\
-	unsigned int size = bigint_size (modulus);			\
-	sizeof ( struct {						\
-		bigint_t ( size ) temp[4];				\
-	} ); } )
+#define bigint_mod_exp_tmp_len( modulus )				\
+	sizeof ( struct { typeof ( *(modulus) ) temp[4]; } )
 
 #include <bits/bigint.h>
 

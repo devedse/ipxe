@@ -13,10 +13,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __EFI_HII_CONFIG_ACCESS_H__
-#define __EFI_HII_CONFIG_ACCESS_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Protocol/FormBrowser2.h>
 
@@ -221,5 +221,3 @@ struct _EFI_HII_CONFIG_ACCESS_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiHiiConfigAccessProtocolGuid;
-
-#endif

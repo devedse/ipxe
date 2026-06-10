@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -70,5 +71,5 @@ static const uint8_t p256_order[P256_LEN] = {
 };
 
 /** P-256 elliptic curve */
-WEIERSTRASS_CURVE ( p256, p256_curve, P256_LEN,
+WEIERSTRASS_CURVE ( p256, p256_curve, p256_algorithm, P256_LEN,
 		    p256_prime, p256_a, p256_b, p256_base, p256_order );

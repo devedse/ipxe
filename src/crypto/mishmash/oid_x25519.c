@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <byteswap.h>
 #include <ipxe/x25519.h>
@@ -32,15 +33,13 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static uint8_t oid_x25519[] = { ASN1_OID_X25519 };
 
 /** "x25519" OID-identified algorithm */
-struct asn1_algorithm x25519_algorithm __asn1_algorithm = {
+struct asn1_algorithm oid_x25519_algorithm __asn1_algorithm = {
 	.name = "x25519",
-	.curve = &x25519_curve,
 	.oid = ASN1_CURSOR ( oid_x25519 ),
 };
 
 /** X25519 named curve */
 struct tls_named_curve tls_x25519_named_curve __tls_named_curve ( 01 ) = {
-	.curve = &x25519_curve,
+	.exchange = &x25519_algorithm,
 	.code = htons ( TLS_NAMED_CURVE_X25519 ),
-	.pre_master_secret_len = sizeof ( struct x25519_value ),
 };

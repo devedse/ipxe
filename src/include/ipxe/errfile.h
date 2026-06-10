@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <bits/errfile.h>
 
@@ -89,6 +90,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ERRFILE_efi_connect	       ( ERRFILE_CORE | 0x00310000 )
 #define ERRFILE_gpio		       ( ERRFILE_CORE | 0x00320000 )
 #define ERRFILE_spcr		       ( ERRFILE_CORE | 0x00330000 )
+#define ERRFILE_disklog		       ( ERRFILE_CORE | 0x00340000 )
+#define ERRFILE_efi_disklog	       ( ERRFILE_CORE | 0x00350000 )
 
 #define ERRFILE_eisa		     ( ERRFILE_DRIVER | 0x00000000 )
 #define ERRFILE_isa		     ( ERRFILE_DRIVER | 0x00010000 )
@@ -209,7 +212,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ERRFILE_eoib		     ( ERRFILE_DRIVER | 0x007c0000 )
 #define ERRFILE_golan		     ( ERRFILE_DRIVER | 0x007d0000 )
 #define ERRFILE_flexboot_nodnic	     ( ERRFILE_DRIVER | 0x007e0000 )
-#define ERRFILE_virtio_pci	     ( ERRFILE_DRIVER | 0x007f0000 )
+#define ERRFILE_virtio		     ( ERRFILE_DRIVER | 0x007f0000 )
 #define ERRFILE_pciea		     ( ERRFILE_DRIVER | 0x00c00000 )
 #define ERRFILE_axge		     ( ERRFILE_DRIVER | 0x00c10000 )
 #define ERRFILE_thunderx	     ( ERRFILE_DRIVER | 0x00c20000 )
@@ -321,6 +324,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ERRFILE_lldp			( ERRFILE_NET | 0x004c0000 )
 #define ERRFILE_eap_md5			( ERRFILE_NET | 0x004d0000 )
 #define ERRFILE_eap_mschapv2		( ERRFILE_NET | 0x004e0000 )
+#define ERRFILE_syslogs			( ERRFILE_NET | 0x004f0000 )
 
 #define ERRFILE_image		      ( ERRFILE_IMAGE | 0x00000000 )
 #define ERRFILE_elf		      ( ERRFILE_IMAGE | 0x00010000 )
@@ -444,7 +448,10 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ERRFILE_weierstrass	      ( ERRFILE_OTHER | 0x00660000 )
 #define ERRFILE_efi_cacert	      ( ERRFILE_OTHER | 0x00670000 )
 #define ERRFILE_ecdhe		      ( ERRFILE_OTHER | 0x00680000 )
-#define ERRFILE_pnplist_cmd	      ( ERRFILE_OTHER | 0x00690000 )
+#define ERRFILE_ecdsa		      ( ERRFILE_OTHER | 0x00690000 )
+#define ERRFILE_crypto_null	      ( ERRFILE_OTHER | 0x006a0000 )
+#define ERRFILE_ffdhe		      ( ERRFILE_OTHER | 0x006b0000 )
+#define ERRFILE_pnplist_cmd	      ( ERRFILE_OTHER | 0x006b0000 )
 
 /** @} */
 

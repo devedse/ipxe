@@ -7,10 +7,10 @@
 
 **/
 
-#ifndef _BLUETOOTH_H_
-#define _BLUETOOTH_H_
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #pragma pack(1)
 
@@ -54,5 +54,3 @@ typedef struct {
 #define BLUETOOTH_HCI_COMMAND_LOCAL_READABLE_NAME_MAX_SIZE  248
 
 #define BLUETOOTH_HCI_LINK_KEY_SIZE  16
-
-#endif

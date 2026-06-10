@@ -11,10 +11,10 @@
 
 **/
 
-#ifndef __EFI_UDP6_PROTOCOL_H__
-#define __EFI_UDP6_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Protocol/Ip6.h>
 
@@ -572,5 +572,3 @@ struct _EFI_UDP6_PROTOCOL {
 
 extern EFI_GUID  gEfiUdp6ServiceBindingProtocolGuid;
 extern EFI_GUID  gEfiUdp6ProtocolGuid;
-
-#endif

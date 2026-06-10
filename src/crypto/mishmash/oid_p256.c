@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <byteswap.h>
 #include <ipxe/p256.h>
@@ -40,8 +41,6 @@ struct asn1_algorithm prime256v1_algorithm __asn1_algorithm = {
 
 /** P-256 named curve */
 struct tls_named_curve tls_secp256r1_named_curve __tls_named_curve ( 01 ) = {
-	.curve = &p256_curve,
+	.exchange = &p256_algorithm,
 	.code = htons ( TLS_NAMED_CURVE_SECP256R1 ),
-	.format = TLS_POINT_FORMAT_UNCOMPRESSED,
-	.pre_master_secret_len = P256_LEN,
 };

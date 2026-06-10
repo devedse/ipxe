@@ -40,6 +40,34 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/test.h>
 #include "pubkey_test.h"
 
+/** Random data input */
+static const uint8_t *pubkey_random;
+
+/** Length of random data input */
+static size_t pubkey_random_len;
+
+/**
+ * Get random data input
+ *
+ * @v data		Output buffer
+ * @v len		Length of output buffer
+ * @ret rc		Return status code
+ */
+int pubkey_test_get_random ( void *data, size_t len ) {
+
+	/* Sanity check */
+	assert ( len <= pubkey_random_len );
+
+	/* Return random data */
+	memcpy ( data, pubkey_random, len );
+
+	/* Consume random data */
+	pubkey_random += len;
+	pubkey_random_len -= len;
+
+	return 0;
+}
+
 /**
  * Report public key encryption and decryption test result
  *
@@ -57,6 +85,18 @@ void pubkey_okx ( struct pubkey_test *test, const char *file,
 	okx ( pubkey_match ( pubkey, &test->private, &test->public ) == 0,
 	      file, line );
 
+	/* Test encrypting with public key to obtain known ciphertext */
+	ciphertext.data = NULL;
+	ciphertext.len = 0;
+	pubkey_random = test->random;
+	pubkey_random_len = test->random_len;
+	okx ( pubkey_encrypt ( pubkey, &test->public, &test->plaintext,
+			       &ciphertext ) == 0, file, line );
+	okx ( pubkey_random_len == 0, file, line );
+	okx ( asn1_compare ( asn1_built ( &ciphertext ),
+			     &test->ciphertext ) == 0, file, line );
+	free ( ciphertext.data );
+
 	/* Test decrypting with private key to obtain known plaintext */
 	plaintext.data = NULL;
 	plaintext.len = 0;
@@ -71,8 +111,11 @@ void pubkey_okx ( struct pubkey_test *test, const char *file,
 	ciphertext.len = 0;
 	plaintext.data = NULL;
 	plaintext.len = 0;
+	pubkey_random = test->random;
+	pubkey_random_len = test->random_len;
 	okx ( pubkey_encrypt ( pubkey, &test->private, &test->plaintext,
 			       &ciphertext ) == 0, file, line );
+	okx ( pubkey_random_len == 0, file, line );
 	okx ( pubkey_decrypt ( pubkey, &test->public,
 			       asn1_built ( &ciphertext ),
 			       &plaintext ) == 0, file, line );
@@ -86,8 +129,11 @@ void pubkey_okx ( struct pubkey_test *test, const char *file,
 	ciphertext.len = 0;
 	plaintext.data = NULL;
 	plaintext.len = 0;
+	pubkey_random = test->random;
+	pubkey_random_len = test->random_len;
 	okx ( pubkey_encrypt ( pubkey, &test->public, &test->plaintext,
 			       &ciphertext ) == 0, file, line );
+	okx ( pubkey_random_len == 0, file, line );
 	okx ( pubkey_decrypt ( pubkey, &test->private,
 			       asn1_built ( &ciphertext ),
 			       &plaintext ) == 0, file, line );
@@ -140,8 +186,11 @@ void pubkey_sign_okx ( struct pubkey_sign_test *test, const char *file,
 			      &cursor ) == 0, file, line );
 
 	/* Test signing using private key */
+	pubkey_random = test->random;
+	pubkey_random_len = test->random_len;
 	okx ( pubkey_sign ( pubkey, &test->private, digest, digestout,
 			    &builder ) == 0, file, line );
+	okx ( pubkey_random_len == 0, file, line );
 	okx ( builder.len != 0, file, line );
 	okx ( asn1_compare ( asn1_built ( &builder ), &test->signature ) == 0,
 	      file, line );

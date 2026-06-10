@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -95,6 +96,8 @@ struct efi_pxe {
 
 	/** (M)TFTP download interface */
 	struct interface tftp;
+	/** Opcode */
+	unsigned int opcode;
 	/** Block size (for TFTP) */
 	size_t blksize;
 	/** Overall return status */
@@ -353,11 +356,17 @@ static int efi_pxe_tftp_deliver ( struct efi_pxe *pxe,
 	/* Deliver to data transfer buffer */
 	if ( ( rc = xferbuf_deliver ( &pxe->buf, iob_disown ( iobuf ),
 				      meta ) ) != 0 )
-		goto err_deliver;
+		goto done;
+
+	/* Stop when filesize is known, if applicable */
+	if ( ( pxe->opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) &&
+	     ( meta->flags & XFER_FL_ABS_OFFSET ) ) {
+		goto done;
+	}
 
 	return 0;
 
- err_deliver:
+ done:
 	efi_pxe_tftp_close ( pxe, rc );
 	return rc;
 }
@@ -907,7 +916,8 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 
 	/* Fail unless operation is supported */
 	if ( ! ( ( opcode == EFI_PXE_BASE_CODE_TFTP_READ_FILE ) ||
-		 ( opcode == EFI_PXE_BASE_CODE_MTFTP_READ_FILE ) ) ) {
+		 ( opcode == EFI_PXE_BASE_CODE_MTFTP_READ_FILE ) ||
+		 ( opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) ) ) {
 		DBGC ( pxe, "PXE %s unsupported MTFTP opcode %d\n",
 		       pxe->name, opcode );
 		rc = -ENOTSUP;
@@ -924,7 +934,12 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 	pxe->blksize = ( ( callback && blksize ) ? *blksize : -1UL );
 
 	/* Initialise data transfer buffer */
-	xferbuf_fixed_init ( &pxe->buf, data, *len );
+	memset ( &pxe->buf, 0, sizeof ( pxe->buf ) );
+	if ( opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) {
+		xferbuf_void_init ( &pxe->buf );
+	} else {
+		xferbuf_fixed_init ( &pxe->buf, data, *len );
+	}
 
 	/* Open download */
 	if ( ( rc = efi_pxe_tftp_open ( pxe, ip,
@@ -932,14 +947,18 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 		goto err_open;
 
 	/* Wait for download to complete */
+	pxe->opcode = opcode;
 	pxe->rc = -EINPROGRESS;
 	while ( pxe->rc == -EINPROGRESS )
 		step();
+	*len = pxe->buf.max;
 	if ( ( rc = pxe->rc ) != 0 ) {
-		DBGC ( pxe, "PXE %s download failed: %s\n",
-		       pxe->name, strerror ( rc ) );
+		DBGC ( pxe, "PXE %s MTFTP %d failed: %s\n",
+		       pxe->name, opcode, strerror ( rc ) );
 		goto err_download;
 	}
+	DBGC ( pxe, "PXE %s MTFTP %d %p+%llx complete\n",
+	       pxe->name, opcode, data, *len );
 
  err_download:
 	efi_pxe_tftp_close ( pxe, rc );

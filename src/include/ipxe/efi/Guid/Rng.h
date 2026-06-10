@@ -7,10 +7,10 @@
 
 **/
 
-#ifndef RNG_GUID_H_
-#define RNG_GUID_H_
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 typedef struct _EFI_RNG_INTERFACE EFI_RNG_INTERFACE;
 
@@ -153,5 +153,3 @@ extern EFI_GUID  gEfiRngAlgorithmX9313DesGuid;
 extern EFI_GUID  gEfiRngAlgorithmX931AesGuid;
 extern EFI_GUID  gEfiRngAlgorithmRaw;
 extern EFI_GUID  gEfiRngAlgorithmArmRndr;
-
-#endif // #ifndef RNG_GUID_H_

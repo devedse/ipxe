@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/weierstrass.h>
 
@@ -15,5 +16,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define P384_LEN ( 384 / 8 )
 
 extern struct elliptic_curve p384_curve;
+extern struct exchange_algorithm p384_algorithm;
 
 #endif /* _IPXE_P384_H */

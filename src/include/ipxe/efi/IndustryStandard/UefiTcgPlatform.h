@@ -7,10 +7,10 @@
 
 **/
 
-#ifndef __UEFI_TCG_PLATFORM_H__
-#define __UEFI_TCG_PLATFORM_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/IndustryStandard/Tpm12.h>
 #include <ipxe/efi/IndustryStandard/Tpm20.h>
@@ -719,5 +719,3 @@ typedef struct {
 } TCG_NV_INDEX_DYNAMIC_EVENT_LOG_STRUCT_SPDM_MEASUREMENTS;
 
 #pragma pack()
-
-#endif

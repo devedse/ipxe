@@ -9,10 +9,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __PI_HOB_H__
-#define __PI_HOB_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 //
 // HobType of EFI_HOB_GENERIC_HEADER.
@@ -510,5 +510,3 @@ typedef union {
   EFI_HOB_UEFI_CAPSULE                   *Capsule;
   UINT8                                  *Raw;
 } EFI_PEI_HOB_POINTERS;
-
-#endif

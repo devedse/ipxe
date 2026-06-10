@@ -6,17 +6,27 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from hashlib import sha256
 from itertools import count
+import os.path
 import subprocess
+import tempfile
 
 import boto3
 
 BLOCKSIZE = 512 * 1024
+EMPTY_CHECKSUM = b64encode(sha256(b'\0' * BLOCKSIZE).digest()).decode()
 
 
 def detect_architecture(image):
     """Detect CPU architecture"""
-    mdir = subprocess.run(['mdir', '-b', '-i', image, '::/EFI/BOOT'],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    with tempfile.NamedTemporaryFile(mode='w+t') as mtoolsrc:
+        mtoolsrc.writelines([
+            'drive D:', f'file="{image}"',
+            'drive P:', f'file="{image}"', 'partition=4',
+        ])
+        mtoolsrc.flush()
+        mdir = subprocess.run(['mdir', '-b', 'D:/EFI/BOOT', 'P:/EFI/BOOT'],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              check=False, env={'MTOOLSRC': mtoolsrc.name})
     if any(b'BOOTAA64.EFI' in x for x in mdir.stdout.splitlines()):
         return 'arm64'
     return 'x86_64'
@@ -29,6 +39,7 @@ def create_snapshot(region, description, image, tags):
                                      Description=description,
                                      Tags=tags)
     snapshot_id = snapshot['SnapshotId']
+    changed = 0
     with open(image, 'rb') as fh:
         for block in count():
             data = fh.read(BLOCKSIZE)
@@ -36,14 +47,17 @@ def create_snapshot(region, description, image, tags):
                 break
             data = data.ljust(BLOCKSIZE, b'\0')
             checksum = b64encode(sha256(data).digest()).decode()
+            if checksum == EMPTY_CHECKSUM:
+                continue
             client.put_snapshot_block(SnapshotId=snapshot_id,
                                       BlockIndex=block,
                                       BlockData=data,
                                       DataLength=BLOCKSIZE,
                                       Checksum=checksum,
                                       ChecksumAlgorithm='SHA256')
+            changed += 1
     client.complete_snapshot(SnapshotId=snapshot_id,
-                             ChangedBlocksCount=block)
+                             ChangedBlocksCount=changed)
     return snapshot_id
 
 
@@ -113,6 +127,11 @@ def import_image(region, name, family, architecture, image, public, overwrite,
     return image_id
 
 
+def upload_file(filename, bucket):
+    client = boto3.client('s3')
+    client.upload_file(filename, bucket, os.path.basename(filename))
+
+
 def launch_link(region, image_id):
     """Construct a web console launch link"""
     return ("https://console.aws.amazon.com/ec2/v2/home?"
@@ -135,6 +154,8 @@ parser.add_argument('--region', '-r', action='append',
                     help="AWS region(s)")
 parser.add_argument('--wiki', '-w', metavar='FILE',
                     help="Generate Dokuwiki table")
+parser.add_argument('--bucket', '-b',
+                    help="Upload generated outputs to S3 bucket")
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
 
@@ -181,6 +202,8 @@ wikitab = ["^ AWS region  ^ CPU architecture  ^ AMI ID  ^\n"] + list(
 if args.wiki:
     with open(args.wiki, 'wt') as fh:
         fh.writelines(wikitab)
+    if args.bucket:
+        upload_file(args.wiki, args.bucket)
 
 # Show created images
 for region, image in imports:

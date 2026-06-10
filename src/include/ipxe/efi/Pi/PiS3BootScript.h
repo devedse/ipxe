@@ -7,10 +7,10 @@
 
 **/
 
-#ifndef _PI_S3_BOOT_SCRIPT_H_
-#define _PI_S3_BOOT_SCRIPT_H_
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 // *******************************************
 // EFI Boot Script Opcode definitions
@@ -51,5 +51,3 @@ typedef enum {
   EfiBootScriptWidthFillUint64,
   EfiBootScriptWidthMaximum
 } EFI_BOOT_SCRIPT_WIDTH;
-
-#endif

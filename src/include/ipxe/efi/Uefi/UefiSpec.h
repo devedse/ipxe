@@ -13,10 +13,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __UEFI_SPEC_H__
-#define __UEFI_SPEC_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Uefi/UefiMultiPhase.h>
 
@@ -2300,5 +2300,3 @@ typedef struct {
 #include <ipxe/efi/Uefi/UefiPxe.h>
 #include <ipxe/efi/Uefi/UefiGpt.h>
 #include <ipxe/efi/Uefi/UefiInternalFormRepresentation.h>
-
-#endif

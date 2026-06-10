@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +63,7 @@ void xferbuf_detach ( struct xfer_buffer *xferbuf ) {
 
 	xferbuf->data = NULL;
 	xferbuf->len = 0;
+	xferbuf->max = 0;
 	xferbuf->pos = 0;
 }
 
@@ -85,6 +87,10 @@ void xferbuf_free ( struct xfer_buffer *xferbuf ) {
  */
 static int xferbuf_ensure_size ( struct xfer_buffer *xferbuf, size_t len ) {
 	int rc;
+
+	/* Record maximum required size */
+	if ( len > xferbuf->max )
+		xferbuf->max = len;
 
 	/* If buffer is already large enough, do nothing */
 	if ( len <= xferbuf->len )
@@ -123,13 +129,10 @@ int xferbuf_write ( struct xfer_buffer *xferbuf, size_t offset,
 	if ( ( rc = xferbuf_ensure_size ( xferbuf, max_len ) ) != 0 )
 		return rc;
 
-	/* Check that buffer is non-void */
-	if ( len && ( ! xferbuf->data ) )
-		return -ENOTTY;
-
-	/* Copy data to buffer */
+	/* Copy data to buffer (if non-void) */
 	profile_start ( &xferbuf_write_profiler );
-	memcpy ( ( xferbuf->data + offset ), data, len );
+	if ( xferbuf->data )
+		memcpy ( ( xferbuf->data + offset ), data, len );
 	profile_stop ( &xferbuf_write_profiler );
 
 	return 0;

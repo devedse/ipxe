@@ -1,70 +1,137 @@
-#ifndef _VIRTIO_NET_H_
-# define _VIRTIO_NET_H_
+#ifndef _VIRTIO_NET_H
+#define _VIRTIO_NET_H
 
-/* The feature bitmap for virtio net */
-#define VIRTIO_NET_F_CSUM       0       /* Host handles pkts w/ partial csum */
-#define VIRTIO_NET_F_GUEST_CSUM 1       /* Guest handles pkts w/ partial csum */
-#define VIRTIO_NET_F_MTU        3       /* Initial MTU advice */
-#define VIRTIO_NET_F_MAC        5       /* Host has given MAC address. */
-#define VIRTIO_NET_F_GSO        6       /* Host handles pkts w/ any GSO type */
-#define VIRTIO_NET_F_GUEST_TSO4 7       /* Guest can handle TSOv4 in. */
-#define VIRTIO_NET_F_GUEST_TSO6 8       /* Guest can handle TSOv6 in. */
-#define VIRTIO_NET_F_GUEST_ECN  9       /* Guest can handle TSO[6] w/ ECN in. */
-#define VIRTIO_NET_F_GUEST_UFO  10      /* Guest can handle UFO in. */
-#define VIRTIO_NET_F_HOST_TSO4  11      /* Host can handle TSOv4 in. */
-#define VIRTIO_NET_F_HOST_TSO6  12      /* Host can handle TSOv6 in. */
-#define VIRTIO_NET_F_HOST_ECN   13      /* Host can handle TSO[6] w/ ECN in. */
-#define VIRTIO_NET_F_HOST_UFO   14      /* Host can handle UFO in. */
-#define VIRTIO_NET_F_MRG_RXBUF  15      /* Driver can merge receive buffers. */
-#define VIRTIO_NET_F_STATUS     16      /* Configuration status field is available. */
-#define VIRTIO_NET_F_CTRL_VQ    17      /* Control channel is available. */
-#define VIRTIO_NET_F_CTRL_RX    18      /* Control channel RX mode support. */
-#define VIRTIO_NET_F_CTRL_VLAN  19      /* Control channel VLAN filtering. */
-#define VIRTIO_NET_F_GUEST_ANNOUNCE 21  /* Driver can send gratuitous packets. */
+/** @file
+ *
+ * Virtual I/O network device
+ *
+ */
 
-struct virtio_net_config
-{
-   /* The config defining mac address (if VIRTIO_NET_F_MAC) */
-   u8 mac[6];
-   /* See VIRTIO_NET_F_STATUS and VIRTIO_NET_S_* above */
-   u16 status;
-   /* Maximum number of each of transmit and receive queues;
-    * see VIRTIO_NET_F_MQ and VIRTIO_NET_CTRL_MQ.
-    * Legal values are between 1 and 0x8000
-    */
-   u16 max_virtqueue_pairs;
-   /* Default maximum transmit unit advice */
-   u16 mtu;
-} __attribute__((packed));
+FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
-/* This is the first element of the scatter-gather list.  If you don't
- * specify GSO or CSUM features, you can simply ignore the header. */
+#include <ipxe/virtio.h>
 
-struct virtio_net_hdr
-{
-#define VIRTIO_NET_HDR_F_NEEDS_CSUM     1       // Use csum_start, csum_offset
-   uint8_t flags;
-#define VIRTIO_NET_HDR_GSO_NONE         0       // Not a GSO frame
-#define VIRTIO_NET_HDR_GSO_TCPV4        1       // GSO frame, IPv4 TCP (TSO)
-/* FIXME: Do we need this?  If they said they can handle ECN, do they care? */
-#define VIRTIO_NET_HDR_GSO_TCPV4_ECN    2       // GSO frame, IPv4 TCP w/ ECN
-#define VIRTIO_NET_HDR_GSO_UDP          3       // GSO frame, IPv4 UDP (UFO)
-#define VIRTIO_NET_HDR_GSO_TCPV6        4       // GSO frame, IPv6 TCP
-#define VIRTIO_NET_HDR_GSO_ECN          0x80    // TCP has ECN set
-   uint8_t gso_type;
-   uint16_t hdr_len;
-   uint16_t gso_size;
-   uint16_t csum_start;
-   uint16_t csum_offset;
+/** Device has a reported MTU */
+#define VIRTIO_FEAT0_NET_MTU 0x00000008
+
+/** Device has a MAC address */
+#define VIRTIO_FEAT0_NET_MAC 0x00000020
+
+/** MAC address register offset */
+#define VIRTIO_NET_MAC 0x00
+
+/** MTU register offset */
+#define VIRTIO_NET_MTU 0x0a
+
+/** A virtio network packet header */
+union virtio_net_header {
+	/** Legacy interface */
+	uint8_t legacy[10];
+	/** Modern (version 1.0) interface */
+	uint8_t modern[12];
+} __attribute__ (( packed ));
+
+/** Receive queue index */
+#define VIRTIO_NET_RX_INDEX 0
+
+/** Receive queue requested queue size */
+#define VIRTIO_NET_RX_COUNT 128
+
+/** Receive queue maximum fill level */
+#define VIRTIO_NET_RX_MAX 16
+
+/** Transmit queue index */
+#define VIRTIO_NET_TX_INDEX 1
+
+/** Transmit queue requested queue size */
+#define VIRTIO_NET_TX_COUNT 128
+
+/** Transmit queue maximum fill level */
+#define VIRTIO_NET_TX_MAX 32
+
+/** Number of descriptors per packet */
+#define VIRTIO_NET_DESCS 2
+
+/** A virtio network queue */
+struct virtio_net_queue {
+	/** Underlying virtio queue */
+	struct virtio_queue queue;
+	/** I/O buffer list */
+	struct io_buffer **iobufs;
+	/** Descriptor slot ring */
+	uint8_t *slots;
+	/** Effective fill level */
+	unsigned int fill;
+	/** Descriptor index ring mask */
+	unsigned int mask;
+
+	/** Shared packet header */
+	union virtio_net_header hdr;
+	/** DMA mapping for packet header */
+	struct dma_mapping map;
+
+	/** DMA direction for packet header */
+	uint8_t dma;
+	/** Buffer writability flag for packet header */
+	uint8_t write;
+	/** Requested queue size */
+	uint8_t count;
+	/** Maximum fill level */
+	uint8_t max;
 };
 
-/* Virtio 1.0 version of the first element of the scatter-gather list. */
-struct virtio_net_hdr_modern
-{
-   struct virtio_net_hdr legacy;
+/**
+ * Initialise virtio network queue
+ *
+ * @v queue		Virtio network queue
+ * @v index		Queue index
+ * @v iobufs		I/O buffer list
+ * @v slots		Descriptor slot ring
+ * @v dma		DMA direction for packet header
+ * @v write		Writability flag for packet header
+ * @v count		Requested queue size
+ * @v max		Maximum fill level
+ */
+static inline __attribute__ (( always_inline )) void
+virtio_net_queue_init ( struct virtio_net_queue *queue,
+			struct io_buffer **iobufs, uint8_t *slots,
+			unsigned int index, unsigned int count,
+			unsigned int max, unsigned int dma,
+			unsigned int write ) {
 
-   /* Used only if VIRTIO_NET_F_MRG_RXBUF: */
-   uint16_t num_buffers;
+	queue->queue.index = index;
+	queue->iobufs = iobufs;
+	queue->slots = slots;
+	queue->dma = dma;
+	queue->write = write;
+	queue->count = count;
+	queue->max = max;
+}
+
+/** A virtio network device */
+struct virtio_net {
+	/** Underlying virtio device */
+	struct virtio_device virtio;
+	/** Receive queue */
+	struct virtio_net_queue rx;
+	/** Transmit queue */
+	struct virtio_net_queue tx;
+
+	/** Virtio network header length */
+	size_t hlen;
+	/** Maximum frame size */
+	size_t mfs;
+
+	/** Receive descriptor slot ring */
+	uint8_t rx_slots[VIRTIO_NET_RX_MAX];
+	/** Receive I/O buffers */
+	struct io_buffer *rx_iobufs[VIRTIO_NET_RX_MAX];
+
+	/** Transmit descriptor slot ring */
+	uint8_t tx_slots[VIRTIO_NET_TX_MAX];
+	/** Transmit I/O buffers */
+	struct io_buffer *tx_iobufs[VIRTIO_NET_TX_MAX];
 };
 
-#endif /* _VIRTIO_NET_H_ */
+#endif /* _VIRTIO_NET_H */

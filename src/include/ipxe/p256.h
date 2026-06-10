@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/weierstrass.h>
 
@@ -15,5 +16,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define P256_LEN ( 256 / 8 )
 
 extern struct elliptic_curve p256_curve;
+extern struct exchange_algorithm p256_algorithm;
 
 #endif /* _IPXE_P256_H */

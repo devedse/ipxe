@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/defaults.h>
 
@@ -168,6 +169,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *   references to "iPXE". ]
  */
 #define PRODUCT_SETTING_URI "https://ipxe.org/cfg/%s"
+
+/*
+ * Product vendor name
+ *
+ * Vendors creating signed iPXE binaries must set this to the name
+ * present in their EV code signing certificate.
+ */
+#define PRODUCT_VENDOR ""
 
 /*
  * Product security name suffix

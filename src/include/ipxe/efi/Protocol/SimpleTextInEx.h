@@ -10,10 +10,10 @@
 
 **/
 
-#ifndef __SIMPLE_TEXT_IN_EX_H__
-#define __SIMPLE_TEXT_IN_EX_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Protocol/SimpleTextIn.h>
 
@@ -311,5 +311,3 @@ struct _EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiSimpleTextInputExProtocolGuid;
-
-#endif

@@ -9,10 +9,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __PI_DXECIS_H__
-#define __PI_DXECIS_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/efi/Uefi/UefiMultiPhase.h>
 #include <ipxe/efi/Pi/PiMultiPhase.h>
@@ -738,5 +738,3 @@ typedef struct {
 } DXE_SERVICES;
 
 typedef DXE_SERVICES EFI_DXE_SERVICES;
-
-#endif

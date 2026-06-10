@@ -6,10 +6,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __UEFI_GPT_H__
-#define __UEFI_GPT_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 ///
 /// The primary GUID Partition Table Header must be
@@ -136,4 +136,3 @@ typedef struct {
 } EFI_PARTITION_ENTRY;
 
 #pragma pack()
-#endif

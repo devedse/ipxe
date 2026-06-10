@@ -25,6 +25,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -77,6 +78,20 @@ static unsigned long pci_bar ( struct pci_device *pci, unsigned int reg ) {
 		}
 	}
 	return low;
+}
+
+/**
+ * Get PCI BAR type
+ *
+ * @v pci		PCI device
+ * @v reg		PCI register number
+ * @v is_io		BAR is an I/O BAR
+ */
+int pci_bar_is_io ( struct pci_device *pci, unsigned int reg ) {
+	unsigned long bar;
+
+	bar = pci_bar ( pci, reg );
+	return ( bar & PCI_BASE_ADDRESS_SPACE_IO );
 }
 
 /**
@@ -351,13 +366,20 @@ int pci_find_next ( struct pci_device *pci, uint32_t *busdevfn ) {
 		hdrtype &= PCI_HEADER_TYPE_MASK;
 		if ( hdrtype == PCI_HEADER_TYPE_BRIDGE ) {
 			pci_read_config_byte ( pci, PCI_SUBORDINATE, &sub );
-			end = PCI_BUSDEVFN ( PCI_SEG ( *busdevfn ),
-					     ( sub + 1 ), 0, 0 );
-			count = ( end - range.start );
-			if ( count > range.count ) {
-				DBGC ( pci, PCI_FMT " found subordinate bus "
-				       "%#02x\n", PCI_ARGS ( pci ), sub );
-				range.count = count;
+			if ( sub <= PCI_BUS ( *busdevfn ) ) {
+				DBGC ( pci, PCI_FMT " ignoring invalid "
+				       "subordinate bus %#02x\n",
+				       PCI_ARGS ( pci ), sub );
+			} else {
+				end = PCI_BUSDEVFN ( PCI_SEG ( *busdevfn ),
+						     ( sub + 1 ), 0, 0 );
+				count = ( end - range.start );
+				if ( count > range.count ) {
+					DBGC ( pci, PCI_FMT " found "
+					       "subordinate bus %#02x\n",
+					       PCI_ARGS ( pci ), sub );
+					range.count = count;
+				}
 			}
 		}
 

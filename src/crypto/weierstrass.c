@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -1021,6 +1022,61 @@ int weierstrass_add_once ( struct weierstrass_curve *curve,
 
 	/* Convert result back to affine co-ordinates */
 	weierstrass_done ( curve, &temp.result, &temp.addend, result );
+
+	return 0;
+}
+
+/**
+ * Calculate public key
+ *
+ * @v curve		Weierstrass curve
+ * @v private		Private key
+ * @v public		Public key to fill in
+ */
+void weierstrass_public ( struct weierstrass_curve *curve, const void *private,
+			  void *public ) {
+	size_t len = curve->len;
+	weierstrass_uncompressed_t ( len ) *uncompressed = public;
+	int rc;
+
+	/* Calculate public key */
+	uncompressed->format = WEIERSTRASS_FORMAT;
+	rc = weierstrass_multiply ( curve, curve->base, private,
+				    &uncompressed->xy );
+
+	/* Can never fail when using the curve's own base point */
+	assert ( rc == 0 );
+}
+
+/**
+ * Calculate shared secret
+ *
+ * @v curve		Weierstrass curve
+ * @v private		Private key
+ * @v partner		Partner public key
+ * @v shared		Shared secret to fill in
+ * @ret rc		Return status code
+ */
+int weierstrass_shared ( struct weierstrass_curve *curve, const void *private,
+			 const void *partner, void *shared ) {
+	size_t len = curve->len;
+	const weierstrass_uncompressed_t ( len ) *uncompressed = partner;
+	weierstrass_raw_t ( len ) point;
+	int rc;
+
+	/* Calculate shared secret */
+	if ( ( rc = weierstrass_multiply ( curve, &uncompressed->xy, private,
+					   &point.xy ) ) != 0 )
+		return rc;
+	memcpy ( shared, &point.x, sizeof ( point.x ) );
+
+	/* Check for point at infinity */
+	if ( weierstrass_is_infinity ( curve, &point.xy ) )
+		return -EPERM;
+
+	/* Check format byte */
+	if ( uncompressed->format != WEIERSTRASS_FORMAT )
+		return -EPERM;
 
 	return 0;
 }

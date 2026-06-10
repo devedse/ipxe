@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -78,11 +79,15 @@ static int efi_veto_unload ( struct efi_veto *veto ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_HANDLE driver = veto->driver;
 	EFI_HANDLE image = veto->image;
+	struct efi_dropped_tpl tpl;
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Unload the driver */
-	if ( ( efirc = bs->UnloadImage ( image ) ) != 0 ) {
+	/* Unload the driver at external TPL */
+	efi_drop_tpl ( &tpl );
+	efirc = bs->UnloadImage ( image );
+	efi_undrop_tpl ( &tpl );
+	if ( efirc != 0 ) {
 		rc = -EEFI ( efirc );
 		DBGC ( driver, "EFIVETO %s could not unload",
 		       efi_handle_name ( driver ) );
@@ -475,30 +480,6 @@ efi_veto_vmware_uefipxebc ( EFI_DRIVER_BINDING_PROTOCOL *binding __unused,
 	return 1;
 }
 
-/**
- * Veto Dhcp6Dxe driver
- *
- * @v binding		Driver binding protocol
- * @v loaded		Loaded image protocol
- * @v manufacturer	Manufacturer name, if present
- * @v name		Driver name, if present
- * @ret vetoed		Driver is to be vetoed
- */
-static int efi_veto_dhcp6 ( EFI_DRIVER_BINDING_PROTOCOL *binding __unused,
-			    EFI_LOADED_IMAGE_PROTOCOL *loaded __unused,
-			    const char *manufacturer __unused,
-			    const CHAR16 *name ) {
-	static const CHAR16 dhcp6[] = L"DHCP6 Protocol Driver";
-
-	/* Check driver name */
-	if ( ! name )
-		return 0;
-	if ( memcmp ( name, dhcp6, sizeof ( dhcp6 ) ) != 0 )
-		return 0;
-
-	return 1;
-}
-
 /** Driver vetoes */
 static struct efi_veto_candidate efi_vetoes[] = {
 	{
@@ -512,10 +493,6 @@ static struct efi_veto_candidate efi_vetoes[] = {
 	{
 		.name = "VMware UefiPxeBc",
 		.veto = efi_veto_vmware_uefipxebc,
-	},
-	{
-		.name = "Dhcp6",
-		.veto = efi_veto_dhcp6,
 	},
 };
 

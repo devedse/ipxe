@@ -9,10 +9,10 @@
 
 **/
 
-#ifndef __PI_DEPENDENCY_H__
-#define __PI_DEPENDENCY_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 ///
 /// If present, this must be the first and only opcode,
@@ -39,5 +39,3 @@ FILE_LICENCE ( BSD2_PATENT );
 /// EFI_DEP_SOR is only used by DXE driver.
 ///
 #define EFI_DEP_SOR  0x09
-
-#endif

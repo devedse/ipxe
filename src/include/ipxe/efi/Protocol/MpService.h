@@ -36,10 +36,10 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef _MP_SERVICE_PROTOCOL_H_
-#define _MP_SERVICE_PROTOCOL_H_
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 ///
 /// Global ID for the EFI_MP_SERVICES_PROTOCOL.
@@ -672,5 +672,3 @@ struct _EFI_MP_SERVICES_PROTOCOL {
 };
 
 extern EFI_GUID  gEfiMpServiceProtocolGuid;
-
-#endif

@@ -1,5 +1,6 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 
+#include <ipxe/disklog.h>
 #include <config/console.h>
 
 	.section ".note.GNU-stack", "", @progbits
@@ -14,6 +15,11 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define HEADS 64
 #define SECTORS 32
 #define CYLADDR(cyl) ((((cyl) * HEADS + (((cyl) == 0) & 1)) * SECTORS) * 512)
+
+/* Accept CONSOLE_DISKLOG as a synonym for CONSOLE_INT13 */
+#if ( defined ( CONSOLE_DISKLOG ) && ! defined ( CONSOLE_INT13 ) )
+#define CONSOLE_INT13 CONSOLE_DISKLOG
+#endif
 
 #ifdef CONSOLE_INT13
 #define LOGPART 1
@@ -56,7 +62,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 
 	/* Partition 3: log partition (for CONSOLE_INT13) */
 	.if LOGPART
-	partition 0x00, 0xe0, LOGSTART, LOGCOUNT
+	partition 0x00, DISKLOG_PARTITION_TYPE, LOGSTART, LOGCOUNT
 	.else
 	.space 16
 	.endif
@@ -71,7 +77,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 /* Skip to start of log partition */
 	.if LOGPART
 	.org CYLADDR(LOGSTART)
-	.ascii "iPXE LOG\n\n"
+	.ascii DISKLOG_MAGIC
 	.endif
 
 /* Skip to start of boot partition */

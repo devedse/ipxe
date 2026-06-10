@@ -9,10 +9,10 @@
 
 **/
 
-#ifndef __SERIAL_IO_PROTOCOL_H__
-#define __SERIAL_IO_PROTOCOL_H__
+#pragma once
 
 FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_SERIAL_IO_PROTOCOL_GUID \
   { \
@@ -307,5 +307,3 @@ struct _EFI_SERIAL_IO_PROTOCOL {
 
 extern EFI_GUID  gEfiSerialIoProtocolGuid;
 extern EFI_GUID  gEfiSerialTerminalDeviceTypeGuid;
-
-#endif

@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -29,7 +30,6 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
-#include <time.h>
 #include <errno.h>
 #include <byteswap.h>
 #include <ipxe/pending.h>
@@ -37,6 +37,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/md5.h>
 #include <ipxe/sha1.h>
 #include <ipxe/sha256.h>
+#include <ipxe/md5_sha1.h>
 #include <ipxe/aes.h>
 #include <ipxe/rsa.h>
 #include <ipxe/iobuf.h>
@@ -50,7 +51,6 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/validator.h>
 #include <ipxe/job.h>
 #include <ipxe/dhe.h>
-#include <ipxe/ecdhe.h>
 #include <ipxe/tls.h>
 #include <config/crypto.h>
 
@@ -198,6 +198,8 @@ static LIST_HEAD ( tls_sessions );
 static void tls_tx_resume_all ( struct tls_session *session );
 static struct io_buffer * tls_alloc_iob ( struct tls_connection *tls,
 					  size_t len );
+static int tls_send_alert ( struct tls_connection *tls, unsigned int level,
+			    unsigned int description );
 static int tls_send_record ( struct tls_connection *tls, unsigned int type,
 			     struct io_buffer *iobuf );
 static int tls_send_plaintext ( struct tls_connection *tls, unsigned int type,
@@ -280,71 +282,6 @@ tls_version ( struct tls_connection *tls, unsigned int version ) {
 
 /******************************************************************************
  *
- * Hybrid MD5+SHA1 hash as used by TLSv1.1 and earlier
- *
- ******************************************************************************
- */
-
-/**
- * Initialise MD5+SHA1 algorithm
- *
- * @v ctx		MD5+SHA1 context
- */
-static void md5_sha1_init ( void *ctx ) {
-	struct md5_sha1_context *context = ctx;
-
-	digest_init ( &md5_algorithm, context->md5 );
-	digest_init ( &sha1_algorithm, context->sha1 );
-}
-
-/**
- * Accumulate data with MD5+SHA1 algorithm
- *
- * @v ctx		MD5+SHA1 context
- * @v data		Data
- * @v len		Length of data
- */
-static void md5_sha1_update ( void *ctx, const void *data, size_t len ) {
-	struct md5_sha1_context *context = ctx;
-
-	digest_update ( &md5_algorithm, context->md5, data, len );
-	digest_update ( &sha1_algorithm, context->sha1, data, len );
-}
-
-/**
- * Generate MD5+SHA1 digest
- *
- * @v ctx		MD5+SHA1 context
- * @v out		Output buffer
- */
-static void md5_sha1_final ( void *ctx, void *out ) {
-	struct md5_sha1_context *context = ctx;
-	struct md5_sha1_digest *digest = out;
-
-	digest_final ( &md5_algorithm, context->md5, digest->md5 );
-	digest_final ( &sha1_algorithm, context->sha1, digest->sha1 );
-}
-
-/** Hybrid MD5+SHA1 digest algorithm */
-static struct digest_algorithm md5_sha1_algorithm = {
-	.name		= "md5+sha1",
-	.ctxsize	= sizeof ( struct md5_sha1_context ),
-	.blocksize	= 0, /* Not applicable */
-	.digestsize	= sizeof ( struct md5_sha1_digest ),
-	.init		= md5_sha1_init,
-	.update		= md5_sha1_update,
-	.final		= md5_sha1_final,
-};
-
-/** RSA digestInfo prefix for MD5+SHA1 algorithm */
-struct rsa_digestinfo_prefix rsa_md5_sha1_prefix __rsa_digestinfo_prefix = {
-	.digest = &md5_sha1_algorithm,
-	.data = NULL, /* MD5+SHA1 signatures have no digestInfo */
-	.len = 0,
-};
-
-/******************************************************************************
- *
  * Cleanup functions
  *
  ******************************************************************************
@@ -419,6 +356,9 @@ static void free_tls ( struct refcnt *refcnt ) {
  * @v rc		Status code
  */
 static void tls_close ( struct tls_connection *tls, int rc ) {
+
+	/* Send closure alert */
+	tls_send_alert ( tls, TLS_ALERT_WARNING, TLS_ALERT_CLOSE_NOTIFY );
 
 	/* Remove pending operations, if applicable */
 	pending_put ( &tls->client.negotiation );
@@ -1028,38 +968,19 @@ tls_signature_hash_algorithm ( struct pubkey_algorithm *pubkey,
 }
 
 /**
- * Find TLS signature algorithm
+ * Find TLS signature and hash algorithm
  *
  * @v code		Signature and hash algorithm identifier
- * @ret pubkey		Public key algorithm, or NULL
+ * @ret sig_hash	Signature and hash algorithm, or NULL
  */
-static struct pubkey_algorithm *
-tls_signature_hash_pubkey ( struct tls_signature_hash_id code ) {
+static struct tls_signature_hash_algorithm *
+tls_find_signature_hash ( unsigned int code ) {
 	struct tls_signature_hash_algorithm *sig_hash;
 
 	/* Identify signature and hash algorithm */
 	for_each_table_entry ( sig_hash, TLS_SIG_HASH_ALGORITHMS ) {
-		if ( sig_hash->code.signature == code.signature )
-			return sig_hash->pubkey;
-	}
-
-	return NULL;
-}
-
-/**
- * Find TLS hash algorithm
- *
- * @v code		Signature and hash algorithm identifier
- * @ret digest		Digest algorithm, or NULL
- */
-static struct digest_algorithm *
-tls_signature_hash_digest ( struct tls_signature_hash_id code ) {
-	struct tls_signature_hash_algorithm *sig_hash;
-
-	/* Identify signature and hash algorithm */
-	for_each_table_entry ( sig_hash, TLS_SIG_HASH_ALGORITHMS ) {
-		if ( sig_hash->code.hash == code.hash )
-			return sig_hash->digest;
+		if ( sig_hash->code == code )
+			return sig_hash;
 	}
 
 	return NULL;
@@ -1194,8 +1115,7 @@ static int tls_client_hello ( struct tls_connection *tls,
 		uint16_t len;
 		struct {
 			uint16_t len;
-			struct tls_signature_hash_id
-				code[TLS_NUM_SIG_HASH_ALGORITHMS];
+			uint16_t code[TLS_NUM_SIG_HASH_ALGORITHMS];
 		} __attribute__ (( packed )) data;
 	} __attribute__ (( packed )) *signature_algorithms_ext;
 	struct {
@@ -1497,11 +1417,12 @@ struct tls_key_exchange_algorithm tls_pubkey_exchange_algorithm = {
 static int tls_verify_dh_params ( struct tls_connection *tls,
 				  size_t param_len ) {
 	struct tls_cipherspec *cipherspec = &tls->tx.cipherspec.pending;
+	struct tls_signature_hash_algorithm *sig_hash;
 	struct pubkey_algorithm *pubkey;
 	struct digest_algorithm *digest;
 	int use_sig_hash = tls_version ( tls, TLS_VERSION_TLS_1_2 );
 	const struct {
-		struct tls_signature_hash_id sig_hash[use_sig_hash];
+		uint16_t sig_hash[use_sig_hash];
 		uint16_t signature_len;
 		uint8_t signature[0];
 	} __attribute__ (( packed )) *sig;
@@ -1531,17 +1452,19 @@ static int tls_verify_dh_params ( struct tls_connection *tls,
 
 	/* Identify signature and hash algorithm */
 	if ( use_sig_hash ) {
-		pubkey = tls_signature_hash_pubkey ( sig->sig_hash[0] );
-		digest = tls_signature_hash_digest ( sig->sig_hash[0] );
-		if ( ( ! pubkey ) || ( ! digest ) ) {
-			DBGC ( tls, "TLS %p ServerKeyExchange unsupported "
-			       "signature and hash algorithm\n", tls );
+		sig_hash = tls_find_signature_hash ( sig->sig_hash[0] );
+		if ( ! sig_hash ) {
+			DBGC ( tls, "TLS %p unsupported signature hash "
+			       "%#04x\n", tls, sig->sig_hash[0] );
 			return -ENOTSUP_SIG_HASH;
 		}
-		if ( pubkey != cipherspec->suite->pubkey ) {
-			DBGC ( tls, "TLS %p ServerKeyExchange incorrect "
-			       "signature algorithm %s (expected %s)\n", tls,
-			       pubkey->name, cipherspec->suite->pubkey->name );
+		pubkey = sig_hash->pubkey;
+		digest = sig_hash->digest;
+		DBGC ( tls, "TLS %p using signature hash %s-%s\n",
+		       tls, pubkey->name, digest->name );
+		if ( sig_hash->algorithm != tls->server.algorithm ) {
+			DBGC ( tls, "TLS %p cannot use %s public key\n",
+			       tls, tls->server.algorithm->name );
 			return -EPERM_KEY_EXCHANGE;
 		}
 	} else {
@@ -1710,6 +1633,7 @@ struct tls_key_exchange_algorithm tls_dhe_exchange_algorithm = {
  */
 static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 	struct tls_named_curve *curve;
+	struct exchange_algorithm *exchange;
 	const struct {
 		uint8_t curve_type;
 		uint16_t named_curve;
@@ -1717,9 +1641,9 @@ static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 		uint8_t public[0];
 	} __attribute__ (( packed )) *ecdh;
 	size_t param_len;
-	size_t pointsize;
-	size_t keysize;
-	size_t offset;
+	size_t privsize;
+	size_t pubsize;
+	size_t sharedsize;
 	int rc;
 
 	/* Parse ServerKeyExchange record */
@@ -1755,24 +1679,15 @@ static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 			   tls->server.exchange_len );
 		return -ENOTSUP_CURVE;
 	}
-	DBGC ( tls, "TLS %p using named curve %s\n", tls, curve->curve->name );
-	pointsize = curve->curve->pointsize;
-	keysize = curve->curve->keysize;
-	offset = ( curve->format ? 1 : 0 );
+	exchange = curve->exchange;
+	privsize = exchange->privsize;
+	pubsize = exchange->pubsize;
+	sharedsize = exchange->sharedsize;
+	DBGC ( tls, "TLS %p using named curve %s\n", tls, exchange->name );
 
 	/* Check key length */
-	if ( ecdh->public_len != ( offset + pointsize ) ) {
-		DBGC ( tls, "TLS %p invalid %s key\n",
-		       tls, curve->curve->name );
-		DBGC_HDA ( tls, 0, tls->server.exchange,
-			   tls->server.exchange_len );
-		return -EINVAL_KEY_EXCHANGE;
-	}
-
-	/* Check curve point format byte (if present) */
-	if ( curve->format && ( ecdh->public[0] != curve->format ) ) {
-		DBGC ( tls, "TLS %p invalid %s curve point format\n",
-		       tls, curve->curve->name );
+	if ( ecdh->public_len != pubsize ) {
+		DBGC ( tls, "TLS %p invalid %s key\n", tls, exchange->name );
 		DBGC_HDA ( tls, 0, tls->server.exchange,
 			   tls->server.exchange_len );
 		return -EINVAL_KEY_EXCHANGE;
@@ -1780,26 +1695,17 @@ static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 
 	/* Construct pre-master secret and ClientKeyExchange record */
 	{
-		uint8_t private[keysize];
-		uint8_t pre_master_secret[pointsize];
+		uint8_t private[privsize];
+		uint8_t pre_master_secret[sharedsize];
 		struct {
 			uint32_t type_length;
 			uint8_t public_len;
-			uint8_t public[ecdh->public_len];
+			uint8_t public[pubsize];
 		} __attribute__ (( packed )) key_xchg;
 
 		/* Generate ephemeral private key */
 		if ( ( rc = tls_generate_random ( tls, private,
 						  sizeof ( private ) ) ) != 0){
-			return rc;
-		}
-
-		/* Exchange keys */
-		if ( ( rc = ecdhe_key ( curve->curve, ( ecdh->public + offset ),
-					private, ( key_xchg.public + offset ),
-					pre_master_secret ) ) != 0 ) {
-			DBGC ( tls, "TLS %p could not exchange ECDHE key: %s\n",
-			       tls, strerror ( rc ) );
 			return rc;
 		}
 
@@ -1809,8 +1715,7 @@ static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 			  htonl ( sizeof ( key_xchg ) -
 				  sizeof ( key_xchg.type_length ) ) );
 		key_xchg.public_len = sizeof ( key_xchg.public );
-		if ( curve->format )
-			key_xchg.public[0] = curve->format;
+		exchange_public ( exchange, private, key_xchg.public );
 
 		/* Transmit Client Key Exchange record */
 		if ( ( rc = tls_send_handshake ( tls, &key_xchg,
@@ -1818,9 +1723,17 @@ static int tls_send_client_key_exchange_ecdhe ( struct tls_connection *tls ) {
 			return rc;
 		}
 
+		/* Generate pre-master secret */
+		if ( ( rc = exchange_shared ( exchange, private, ecdh->public,
+					      pre_master_secret ) ) != 0 ) {
+			DBGC ( tls, "TLS %p could not exchange keys: %s\n",
+			       tls, strerror ( rc ) );
+			return rc;
+		}
+
 		/* Generate master secret */
 		tls_generate_master_secret ( tls, pre_master_secret,
-					     curve->pre_master_secret_len );
+					     sizeof ( pre_master_secret ) );
 	}
 
 	return 0;
@@ -1905,7 +1818,7 @@ static int tls_send_certificate_verify ( struct tls_connection *tls ) {
 		int use_sig_hash = ( ( sig_hash == NULL ) ? 0 : 1 );
 		struct {
 			uint32_t type_length;
-			struct tls_signature_hash_id sig_hash[use_sig_hash];
+			uint16_t sig_hash[use_sig_hash];
 			uint16_t signature_len;
 		} __attribute__ (( packed )) header;
 
@@ -1999,6 +1912,29 @@ static int tls_send_finished ( struct tls_connection *tls ) {
 }
 
 /**
+ * Transmit Alert record
+ *
+ * @v tls		TLS connection
+ * @v level		Alert level
+ * @v description	Alert description
+ * @ret rc		Return status code
+ */
+static int tls_send_alert ( struct tls_connection *tls, unsigned int level,
+			    unsigned int description ) {
+	const struct {
+		uint8_t level;
+		uint8_t description;
+	} __attribute__ (( packed )) alert = {
+		.level = level,
+		.description = description,
+	};
+
+	/* Send record */
+	return tls_send_plaintext ( tls, TLS_TYPE_ALERT, &alert,
+				    sizeof ( alert ) );
+}
+
+/**
  * Receive new Change Cipher record
  *
  * @v tls		TLS connection
@@ -2060,8 +1996,16 @@ static int tls_new_alert ( struct tls_connection *tls,
 	/* Handle alert */
 	switch ( alert->level ) {
 	case TLS_ALERT_WARNING:
-		DBGC ( tls, "TLS %p received warning alert %d\n",
-		       tls, alert->description );
+		switch ( alert->description ) {
+		case TLS_ALERT_CLOSE_NOTIFY:
+			DBGC ( tls, "TLS %p closed by notification\n", tls );
+			tls_close ( tls, 0 );
+			break;
+		default:
+			DBGC ( tls, "TLS %p received warning alert %d\n",
+			       tls, alert->description );
+			break;
+		}
 		return 0;
 	case TLS_ALERT_FATAL:
 		DBGC ( tls, "TLS %p received fatal alert %d\n",
@@ -2375,6 +2319,7 @@ static int tls_parse_chain ( struct tls_connection *tls,
 	memset ( &tls->server.key, 0, sizeof ( tls->server.key ) );
 	x509_chain_put ( tls->server.chain );
 	tls->server.chain = NULL;
+	tls->server.algorithm = NULL;
 
 	/* Create certificate chain */
 	tls->server.chain = x509_alloc_chain();
@@ -2435,6 +2380,7 @@ static int tls_parse_chain ( struct tls_connection *tls,
 	memset ( &tls->server.key, 0, sizeof ( tls->server.key ) );
 	x509_chain_put ( tls->server.chain );
 	tls->server.chain = NULL;
+	tls->server.algorithm = NULL;
  err_alloc_chain:
 	return rc;
 }
@@ -3729,6 +3675,7 @@ static void tls_validator_done ( struct tls_connection *tls, int rc ) {
 	}
 
 	/* Extract the now trusted server public key */
+	tls->server.algorithm = cert->subject.public_key.algorithm;
 	memcpy ( &tls->server.key, &cert->subject.public_key.raw,
 		 sizeof ( tls->server.key ) );
 
@@ -3985,7 +3932,6 @@ int add_tls ( struct interface *xfer, const char *name,
 	tls_clear_cipher ( tls, &tls->rx.cipherspec.active );
 	tls_clear_cipher ( tls, &tls->rx.cipherspec.pending );
 	tls_clear_handshake ( tls );
-	tls->client.random.gmt_unix_time = time ( NULL );
 	iob_populate ( &tls->rx.iobuf, &tls->rx.header, 0,
 		       sizeof ( tls->rx.header ) );
 	INIT_LIST_HEAD ( &tls->rx.data );
