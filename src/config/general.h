@@ -114,6 +114,7 @@ FILE_SECBOOT ( PERMITTED );
 #define PARAM_CMD		/* Request parameter commands */
 #define PCI_CMD			/* PCI commands */
 //#define PING_CMD		/* Ping command */
+//#define PNPLIST_CMD		/* PNP device path listing command */
 //#define PROFSTAT_CMD		/* Profiling commands */
 //#define PXE_CMD		/* PXE commands */
 #define ROUTE_CMD		/* Routing table management commands */

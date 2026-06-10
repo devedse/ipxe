@@ -37,6 +37,9 @@ PROVIDE_REQUIRING_SYMBOL();
 #ifdef PCI_CMD
 REQUIRE_OBJECT ( pci_cmd );
 #endif
+#ifdef PNPLIST_CMD
+REQUIRE_OBJECT ( pnplist_cmd );
+#endif
 #ifdef PCI_SETTINGS
 REQUIRE_OBJECT ( pci_settings );
 #endif
