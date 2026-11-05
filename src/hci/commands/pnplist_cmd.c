@@ -207,6 +207,30 @@ static int pnp_find_parent_bridge ( unsigned int segment, unsigned int target_bu
 }
 
 /**
+ * Print the Windows instance ID of a NIC after its hardware ID
+ *
+ * Windows only takes the instance ID from the device itself when the
+ * NIC has a PCIe Device Serial Number.  Otherwise it derives the ID
+ * from the NIC's location (see the bridge chain), which cannot be
+ * shown here.
+ *
+ * @v pci		PCI device
+ * @v instance		Instance ID from the serial number, or empty
+ */
+static void pnp_print_instance ( struct pci_device *pci,
+				 const char *instance ) {
+
+	if ( instance[0] ) {
+		printf ( "\\%s\n", instance );
+	} else {
+		printf ( " at %02x:%02x.%x (no serial number, so the instance "
+			 "ID depends on the PCI location)\n",
+			 PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
+			 PCI_FUNC ( pci->busdevfn ) );
+	}
+}
+
+/**
  * Display Windows-style PNP device path for a network device
  *
  * @v netdev		Network device
@@ -309,10 +333,10 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 			if ( n > 0 )
 				pos += n;
 		} else {
-			printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+			printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X",
 				 pci->vendor, pci->device, pci->device, pci->vendor,
-				 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-				 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+				 revision );
+			pnp_print_instance ( pci, instance );
 		}
 	} else {
 		printf ( "DEBUG: Using actual subsystem IDs\n" );
@@ -338,10 +362,10 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 			if ( n > 0 )
 				pos += n;
 		} else {
-			printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X\\%X&%X&%X&%X\n",
+			printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X",
 				 pci->vendor, pci->device, subsys_device, subsys_vendor,
-				 revision, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ),
-				 PCI_FUNC ( pci->busdevfn ), pci->busdevfn );
+				 revision );
+			pnp_print_instance ( pci, instance );
 		}
 	}
 
