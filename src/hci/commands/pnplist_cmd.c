@@ -229,6 +229,7 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 	printf ( "\nDEBUG: ==== Processing device '%s' ====\n", netdev->name );
 
 	/* Get the underlying PCI device */
+	*used = 0;
 	if ( pnp_get_pci_device ( netdev, pci ) != 0 ) {
 		printf ( "DEBUG: Could not identify PCI device for '%s', skipping\n" , netdev->name );
 		return 0; /* Skip devices we can't identify */
@@ -447,6 +448,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 	size_t output_len = 0;
 	size_t total_used = 0;
 	size_t used;
+	size_t sep;
 	int rc;
 
 	/* Parse options */
@@ -482,18 +484,25 @@ static int pnplist_exec ( int argc, char **argv ) {
 				output = new_output;
 			}
 
-			if ( ! first ) {
-				output[total_used++] = '&';
-				output[total_used] = '\0';
-			}
-
-			if ( ( rc = pnplist_show_device ( netdev, output + total_used,
-							  output_len - total_used, &used, 1 ) ) != 0 ) {
+			/* Leave room for the separator in front of this
+			 * device's fields.
+			 */
+			sep = ( first ? 0 : 1 );
+			if ( ( rc = pnplist_show_device ( netdev, output + total_used + sep,
+							  output_len - total_used - sep, &used, 1 ) ) != 0 ) {
 				free ( output );
 				return rc;
 			}
-			total_used += used;
-			first = 0;
+
+			/* A device that was skipped adds nothing, not even
+			 * a separator.
+			 */
+			if ( used ) {
+				if ( sep )
+					output[total_used] = '&';
+				total_used += ( sep + used );
+				first = 0;
+			}
 		} else {
 			if ( ( rc = pnplist_show_device ( netdev, NULL, 0, &used, 0 ) ) != 0 )
 				return rc;
