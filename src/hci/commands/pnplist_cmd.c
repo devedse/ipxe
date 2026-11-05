@@ -59,91 +59,42 @@ static struct command_descriptor pnplist_cmd =
 		       "[--store <variable>]" );
 
 /**
- * Scan PCI bus for network controllers
+ * Get the PCI device underlying a network device
  *
- * When the pci_device structure is invalid, scan the PCI bus to find
- * network controllers (class code 0x02xxxx) and return the one at the specified index.
- *
- * @v device_index	Index of the network device (0-based)
- * @ret pci		PCI device, or NULL if not found
- * @ret need_free	Set to 1 if returned PCI device should be freed
- */
-static struct pci_device * scan_for_network_device ( int device_index, int *need_free ) {
-	struct pci_device scan_pci;
-	struct pci_device *pci;
-	uint32_t busdevfn = 0;
-	uint8_t base_class;
-	int found_count = 0;
-	int rc;
-	
-	printf ( "DEBUG: Scanning PCI bus for network controller #%d\n", device_index );
-	
-	/* Scan through all PCI devices */
-	while ( ( rc = pci_find_next ( &scan_pci, &busdevfn ) ) == 0 ) {
-		/* Get base class from the class field (base class is in bits 16-23) */
-		base_class = ( scan_pci.class >> 16 ) & 0xff;
-			
-		/* Check if this is a network controller (class 0x02) */
-		if ( base_class == PCI_CLASS_NETWORK ) {
-			printf ( "DEBUG: Found network controller #%d - vendor=0x%04x device=0x%04x bus=%d slot=%d func=%d\n",
-				 found_count, scan_pci.vendor, scan_pci.device,
-				 PCI_BUS ( scan_pci.busdevfn ), PCI_SLOT ( scan_pci.busdevfn ), PCI_FUNC ( scan_pci.busdevfn ) );
-			
-			/* Check if this is the device we're looking for */
-			if ( found_count == device_index ) {
-				/* Allocate and copy the PCI device structure */
-				pci = malloc ( sizeof ( *pci ) );
-				if ( pci ) {
-					memcpy ( pci, &scan_pci, sizeof ( *pci ) );
-					*need_free = 1;
-					printf ( "DEBUG: Selected network controller #%d for this netdev\n", device_index );
-					return pci;
-				}
-			}
-			
-			found_count++;
-		}
-		
-		busdevfn++;
-	}
-	
-	printf ( "DEBUG: Network controller #%d not found (found %d total)\n", device_index, found_count );
-	*need_free = 0;
-	return NULL;
-}
-
-/**
- * Get the PCI device information for a network device
+ * The network device's generic device is a struct pci_device only
+ * when one of iPXE's own PCI drivers drives the NIC.  When the NIC is
+ * driven through the firmware's SNP, NII or MNP protocols, it is a
+ * plain struct device that carries a copy of the PCI device's
+ * description.  Both record the PCI location, so read the PCI device
+ * from there instead of assuming a struct pci_device.
  *
  * @v netdev		Network device
- * @v device_index	Index of this network device in the list
- * @ret pci		PCI device, or NULL if not found
- * @ret need_free	Set to 1 if returned PCI device should be freed
+ * @v pci		PCI device to fill in
+ * @ret rc		Return status code
  */
-static struct pci_device * get_real_pci_device ( struct net_device *netdev, int device_index, int *need_free ) {
-	struct device *dev = netdev->dev;
-	struct pci_device *pci = NULL;
-	
-	*need_free = 0;
-	
-	/* Get direct PCI device access */
-	printf ( "DEBUG: Getting PCI device for netdev '%s' (index %d)\n", netdev->name, device_index );
-	if ( dev->desc.bus_type == BUS_TYPE_PCI ) {
-		pci = container_of ( dev, struct pci_device, dev );
-		printf ( "DEBUG: PCI device found - vendor=0x%04x device=0x%04x bus=%d slot=%d func=%d\n", pci->vendor, pci->device, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
-		
-		/* Check if the PCI device structure has valid data */
-		if ( pci->vendor == 0x0000 || pci->busdevfn == 0 ) {
-			printf ( "DEBUG: PCI device structure appears invalid, scanning for network devices\n" );
-			pci = scan_for_network_device ( device_index, need_free );
-		}
-		
-		return pci;
-	} else {
-		printf ( "DEBUG: Device bus_type is not PCI (bus_type=%d)\n", dev->desc.bus_type );
+static int pnp_get_pci_device ( struct net_device *netdev,
+				struct pci_device *pci ) {
+	struct device_description *desc = &netdev->dev->desc;
+	int rc;
+
+	printf ( "DEBUG: Getting PCI device for netdev '%s'\n", netdev->name );
+	if ( desc->bus_type != BUS_TYPE_PCI ) {
+		printf ( "DEBUG: Device bus_type is not PCI (bus_type=%d)\n",
+			 desc->bus_type );
+		return -ENODEV;
 	}
 
-	return NULL;
+	memset ( pci, 0, sizeof ( *pci ) );
+	pci_init ( pci, desc->location );
+	if ( ( rc = pci_read_config ( pci ) ) != 0 ) {
+		printf ( "DEBUG: No PCI device at %04x:%02x:%02x.%x\n",
+			 PCI_SEG ( pci->busdevfn ), PCI_BUS ( pci->busdevfn ),
+			 PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+		return rc;
+	}
+	printf ( "DEBUG: PCI device found - vendor=0x%04x device=0x%04x bus=%d slot=%d func=%d\n", pci->vendor, pci->device, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+
+	return 0;
 }
 
 /** Maximum number of hops in a PCI instance-ID chain (root -> NIC) */
@@ -254,19 +205,18 @@ static int pnp_find_parent_bridge ( unsigned int target_bus, struct pci_device *
  * Display Windows-style PNP device path for a network device
  *
  * @v netdev		Network device
- * @v device_index	Index of this device in the network device list
  * @v buffer		Output buffer (or NULL to print to console)
  * @v len		Buffer length
  * @v used		Number of bytes used in buffer
  * @v store		Output in storage format (URL-encoded query string)
  * @ret rc		Return status code
  */
-static int pnplist_show_device ( struct net_device *netdev, int device_index, char *buffer, size_t len, size_t *used, int store ) {
-	struct pci_device *pci;
+static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t len, size_t *used, int store ) {
+	struct pci_device pci_dev;
+	struct pci_device *pci = &pci_dev;
 	uint16_t subsys_vendor = 0x0000, subsys_device = 0x0000;
 	uint8_t revision = 0x00;
 	int rc;
-	int need_free = 0;
 	size_t pos = 0;
 	int n;
 	int dsn_pos = 0;
@@ -278,38 +228,10 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 
 	printf ( "\nDEBUG: ==== Processing device '%s' ====\n", netdev->name );
 
-	/* Get the real PCI device information */
-	pci = get_real_pci_device ( netdev, device_index, &need_free );
-	if ( ! pci ) {
+	/* Get the underlying PCI device */
+	if ( pnp_get_pci_device ( netdev, pci ) != 0 ) {
 		printf ( "DEBUG: Could not identify PCI device for '%s', skipping\n" , netdev->name );
 		return 0; /* Skip devices we can't identify */
-	}
-	printf ( "DEBUG: Successfully obtained PCI device (need_free=%d)\n", need_free );
-
-	/* If vendor/device IDs are zero, try reading directly from config space */
-	if ( pci->vendor == 0x0000 || pci->device == 0x0000 ) {
-		uint16_t vendor_from_cfg = 0x0000, device_from_cfg = 0x0000;
-		
-		printf ( "DEBUG: Vendor/Device IDs are zero, attempting to read from PCI config space\n" );
-		
-		/* Read vendor ID from config space */
-		rc = pci_read_config_word ( pci, PCI_VENDOR_ID, &vendor_from_cfg );
-		printf ( "DEBUG: Read vendor ID from config: rc=%d value=0x%04x\n", rc, vendor_from_cfg );
-		
-		/* Read device ID from config space */
-		rc = pci_read_config_word ( pci, PCI_DEVICE_ID, &device_from_cfg );
-		printf ( "DEBUG: Read device ID from config: rc=%d value=0x%04x\n", rc, device_from_cfg );
-		
-		/* If we successfully read valid IDs, update the pci structure */
-		if ( vendor_from_cfg != 0x0000 && device_from_cfg != 0x0000 &&
-		     vendor_from_cfg != 0xFFFF && device_from_cfg != 0xFFFF ) {
-			printf ( "DEBUG: Successfully recovered vendor=0x%04x device=0x%04x from config space\n",
-				 vendor_from_cfg, device_from_cfg );
-			pci->vendor = vendor_from_cfg;
-			pci->device = device_from_cfg;
-		} else {
-			printf ( "DEBUG: WARNING - Could not recover valid vendor/device IDs from config space\n" );
-		}
 	}
 
 	/* Read subsystem IDs via the shared helper, the same one the bridge chain
@@ -507,11 +429,6 @@ static int pnplist_show_device ( struct net_device *netdev, int device_index, ch
 		}
 	}
 
-	/* Free allocated PCI device structure if needed */
-	if ( need_free ) {
-		free ( pci );
-	}
-
 	*used = pos;
 	return 0;
 }
@@ -548,7 +465,6 @@ static int pnplist_exec ( int argc, char **argv ) {
 	}
 
 	int first = 1;
-	int device_index = 0;
 	/* Iterate through all network devices */
 	for_each_netdev ( netdev ) {
 		if ( opts.store ) {
@@ -571,7 +487,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 				output[total_used] = '\0';
 			}
 
-			if ( ( rc = pnplist_show_device ( netdev, device_index, output + total_used,
+			if ( ( rc = pnplist_show_device ( netdev, output + total_used,
 							  output_len - total_used, &used, 1 ) ) != 0 ) {
 				free ( output );
 				return rc;
@@ -579,10 +495,9 @@ static int pnplist_exec ( int argc, char **argv ) {
 			total_used += used;
 			first = 0;
 		} else {
-			if ( ( rc = pnplist_show_device ( netdev, device_index, NULL, 0, &used, 0 ) ) != 0 )
+			if ( ( rc = pnplist_show_device ( netdev, NULL, 0, &used, 0 ) ) != 0 )
 				return rc;
 		}
-		device_index++;
 	}
 
 	/* Store output to variable if requested */
