@@ -54,10 +54,28 @@ FILE_SECBOOT ( PERMITTED );
 /** Maximum number of bridges between the PCI root bus and a NIC */
 #define PNP_MAX_HOPS 16
 
+/** PCI Express capability: PCI Express Capabilities register */
+#define PNP_EXP_FLAGS		0x02
+/** PCI Express capability: device/port type field */
+#define PNP_EXP_FLAGS_TYPE( flags ) ( ( (flags) >> 4 ) & 0xf )
+/** PCI Express capability: slot implemented */
+#define PNP_EXP_FLAGS_SLOT	0x0100
+/** PCI Express capability: Slot Capabilities register */
+#define PNP_EXP_SLTCAP		0x14
+/** Slot Capabilities: hot-plug surprise */
+#define PNP_EXP_SLTCAP_HPS	0x00000020
+/** Slot Capabilities: hot-plug capable */
+#define PNP_EXP_SLTCAP_HPC	0x00000040
+
 /** A PCI device's Windows hardware-ID fields
  *
  * The subsystem IDs are reported as they are, even when zero: Windows
  * then names the device e.g. PCI\VEN_8086&DEV_10D3&SUBSYS_00008086.
+ *
+ * The PCI Express registers are reported raw, for the host to work out
+ * when Windows names a NIC by its Device Serial Number and when by its
+ * location: that is not decided by the NIC, so it is presumably decided
+ * by the port above it (e.g. whether it is a hot-plug capable slot).
  */
 struct pnp_hop {
 	/** Vendor ID */
@@ -72,6 +90,10 @@ struct pnp_hop {
 	uint8_t revision;
 	/** Device and function number: (slot << 3) | func */
 	uint8_t devfn;
+	/** PCI Express Capabilities register (0 if not a PCI Express device) */
+	uint16_t pcie_flags;
+	/** Slot Capabilities register (0 if no slot is implemented) */
+	uint32_t slot_cap;
 };
 
 /** What pnplist reports about one network device */
@@ -194,6 +216,7 @@ static void pnp_read_subsys ( struct pci_device *pci, uint16_t *ssv,
  * @ret rc		Status of reading the revision (0x00 if it failed)
  */
 static int pnp_fill_hop ( struct pci_device *pci, struct pnp_hop *hop ) {
+	int exp;
 	int rc;
 
 	hop->vendor = pci->vendor;
@@ -203,6 +226,18 @@ static int pnp_fill_hop ( struct pci_device *pci, struct pnp_hop *hop ) {
 		hop->revision = 0x00;
 	pnp_read_subsys ( pci, &hop->subsys_vendor, &hop->subsys_device );
 	hop->devfn = ( pci->busdevfn & 0xff );
+
+	/* PCI Express port/slot registers */
+	hop->pcie_flags = 0;
+	hop->slot_cap = 0;
+	if ( ( exp = pci_find_capability ( pci, PCI_CAP_ID_EXP ) ) ) {
+		pci_read_config_word ( pci, ( exp + PNP_EXP_FLAGS ),
+				       &hop->pcie_flags );
+		if ( hop->pcie_flags & PNP_EXP_FLAGS_SLOT ) {
+			pci_read_config_dword ( pci, ( exp + PNP_EXP_SLTCAP ),
+						&hop->slot_cap );
+		}
+	}
 
 	return rc;
 }
@@ -366,6 +401,35 @@ static int pnp_read_nic ( struct net_device *netdev, struct pnp_nic *nic ) {
 }
 
 /**
+ * Print a device's PCI Express port type and slot flags
+ *
+ * @v hop		Hardware-ID fields
+ */
+static void pnp_print_pcie ( struct pnp_hop *hop ) {
+	static const char *types[] = {
+		"endpoint", "legacy endpoint", "type 2", "type 3", "root port",
+		"upstream port", "downstream port", "PCIe-to-PCI bridge",
+		"PCI-to-PCIe bridge", "integrated endpoint", "event collector",
+	};
+	unsigned int type = PNP_EXP_FLAGS_TYPE ( hop->pcie_flags );
+
+	if ( ! hop->pcie_flags ) {
+		printf ( " (not PCIe)" );
+		return;
+	}
+	printf ( " (%s", ( ( type < ( sizeof ( types ) / sizeof ( types[0] ) ) ) ?
+			   types[type] : "unknown type" ) );
+	if ( hop->pcie_flags & PNP_EXP_FLAGS_SLOT ) {
+		printf ( ", slot%s%s",
+			 ( ( hop->slot_cap & PNP_EXP_SLTCAP_HPC ) ?
+			   ", hot-plug" : "" ),
+			 ( ( hop->slot_cap & PNP_EXP_SLTCAP_HPS ) ?
+			   ", surprise" : "" ) );
+	}
+	printf ( ")" );
+}
+
+/**
  * Print a NIC report to the console
  *
  * Windows only takes the instance ID from the device itself when the
@@ -391,14 +455,19 @@ static void pnp_print_nic ( struct pnp_nic *nic ) {
 			 PCI_FUNC ( nic->busdevfn ) );
 	}
 
+	printf ( "DEBUG: %s PCIe type:", nic->netdev->name );
+	pnp_print_pcie ( &nic->id );
+	printf ( "\n" );
 	printf ( "DEBUG: %s instance-id chain: complete=%d, %d bridge(s) "
 		 "root->parent (NIC excluded)\n", nic->netdev->name,
 		 nic->chain_complete, nic->nbridges );
 	for ( i = 0 ; i < nic->nbridges ; i++ ) {
 		hop = &nic->bridges[i];
-		printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X\n",
+		printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X",
 			 i, hop->vendor, hop->device, hop->subsys_device,
 			 hop->subsys_vendor, hop->revision, hop->devfn );
+		pnp_print_pcie ( hop );
+		printf ( "\n" );
 	}
 }
 
@@ -407,9 +476,10 @@ static void pnp_print_nic ( struct pnp_nic *nic ) {
  *
  * Per NIC: netN_ven, _dev, _subsys_ven, _subsys_dev, _rev, _bus_loc,
  * _dsn_present, _instance (the ready-to-use instance ID suffix when a
- * DSN is present), _chain_complete, and per bridge K (0 = the bridge on
- * the root bus) netN_chainK_ven, _dev, _subsys_ven, _subsys_dev, _rev
- * and _devfn.
+ * DSN is present), _chain_complete, _pcie_flags, and per bridge K (0 =
+ * the bridge on the root bus) netN_chainK_ven, _dev, _subsys_ven,
+ * _subsys_dev, _rev, _devfn, _pcie_flags and _slot_cap.  The PCI Express
+ * Capabilities and Slot Capabilities registers are given raw (as 0x...).
  *
  * As with ssnprintf(), call this with a NULL buffer and zero size to
  * find the length needed, then again to fill in the buffer.
@@ -437,7 +507,7 @@ static size_t pnp_format_nics ( char *buf, size_t size,
 				   "&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x"
 				   "&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x"
 				   "&%s_dsn_present=%d&%s_instance=%s"
-				   "&%s_chain_complete=%d",
+				   "&%s_chain_complete=%d&%s_pcie_flags=0x%04x",
 				   ( i ? "&" : "" ),
 				   name, nic->id.vendor, name, nic->id.device,
 				   name, nic->id.subsys_vendor,
@@ -448,7 +518,8 @@ static size_t pnp_format_nics ( char *buf, size_t size,
 				   PCI_FUNC ( nic->busdevfn ),
 				   name, ( nic->instance[0] != '\0' ),
 				   name, nic->instance,
-				   name, nic->chain_complete );
+				   name, nic->chain_complete,
+				   name, nic->id.pcie_flags );
 		for ( j = 0 ; j < nic->nbridges ; j++ ) {
 			hop = &nic->bridges[j];
 			len += ssnprintf ( ( buf + len ), ( size - len ),
@@ -457,13 +528,17 @@ static size_t pnp_format_nics ( char *buf, size_t size,
 					   "&%s_chain%d_subsys_ven=0x%04x"
 					   "&%s_chain%d_subsys_dev=0x%04x"
 					   "&%s_chain%d_rev=0x%02x"
-					   "&%s_chain%d_devfn=%02x",
+					   "&%s_chain%d_devfn=%02x"
+					   "&%s_chain%d_pcie_flags=0x%04x"
+					   "&%s_chain%d_slot_cap=0x%08x",
 					   name, j, hop->vendor,
 					   name, j, hop->device,
 					   name, j, hop->subsys_vendor,
 					   name, j, hop->subsys_device,
 					   name, j, hop->revision,
-					   name, j, hop->devfn );
+					   name, j, hop->devfn,
+					   name, j, hop->pcie_flags,
+					   name, j, hop->slot_cap );
 		}
 	}
 	return len;
