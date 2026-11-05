@@ -177,18 +177,23 @@ static void pnp_fill_hop ( struct pci_device *pci, struct pnp_hop *hop ) {
  * Find the PCI-to-PCI bridge whose secondary bus number matches a target bus.
  *
  * This is the immediate parent bridge of any device on @c target_bus.
+ * Bus numbers are only unique within a PCI segment, so only bridges in
+ * the same segment are considered.
  *
+ * @v segment		PCI segment of the target bus
  * @v target_bus	Secondary bus number to match
  * @v out		PCI device to fill with the bridge on success
  * @ret found		1 if a parent bridge was found, 0 otherwise
  */
-static int pnp_find_parent_bridge ( unsigned int target_bus, struct pci_device *out ) {
+static int pnp_find_parent_bridge ( unsigned int segment, unsigned int target_bus,
+				    struct pci_device *out ) {
 	struct pci_device scan;
-	uint32_t busdevfn = 0;
+	uint32_t busdevfn = PCI_BUSDEVFN ( segment, 0, 0, 0 );
 	uint8_t hdr;
 	uint8_t sec;
 
-	while ( pci_find_next ( &scan, &busdevfn ) == 0 ) {
+	while ( ( pci_find_next ( &scan, &busdevfn ) == 0 ) &&
+		( PCI_SEG ( busdevfn ) == segment ) ) {
 		if ( ( pci_read_config_byte ( &scan, PCI_HEADER_TYPE, &hdr ) == 0 ) &&
 		     ( ( hdr & PCI_HEADER_TYPE_MASK ) == PCI_HEADER_TYPE_BRIDGE ) &&
 		     ( pci_read_config_byte ( &scan, PCI_SECONDARY, &sec ) == 0 ) &&
@@ -368,12 +373,17 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 	 * hashes these.  netN_chain_complete signals whether the walk reached
 	 * the root bus: 1 means the chain (even if it has zero bridges, i.e. the
 	 * NIC sits on the root bus) is trustworthy; 0 means a topology gap, so
-	 * the host keeps the package's instance ID instead of a wrong one. */
+	 * the host keeps the package's instance ID instead of a wrong one.
+	 *
+	 * The host computes the ID for the first PCI root (ACPI\PNP0A08\0),
+	 * which is bus 0 of segment 0.  A chain that ends at bus 0 of another
+	 * segment belongs to another root, so it is reported as incomplete. */
 	{
 		struct pnp_hop hops[PNP_MAX_HOPS];
 		int nbridges = 0;
 		int reached_root = 0;
 		int i;
+		unsigned int segment = PCI_SEG ( pci->busdevfn );
 		unsigned int bus = PCI_BUS ( pci->busdevfn );
 		struct pci_device parent;
 
@@ -383,12 +393,12 @@ static int pnplist_show_device ( struct net_device *netdev, char *buffer, size_t
 		 * hops[nbridges-1] = the bridge sitting on the root bus. */
 		while ( 1 ) {
 			if ( bus == 0 ) {
-				reached_root = 1;
+				reached_root = ( segment == 0 );
 				break;
 			}
 			if ( nbridges >= PNP_MAX_HOPS )
 				break;
-			if ( ! pnp_find_parent_bridge ( bus, &parent ) )
+			if ( ! pnp_find_parent_bridge ( segment, bus, &parent ) )
 				break;
 			pnp_fill_hop ( &parent, &hops[nbridges++] );
 			bus = PCI_BUS ( parent.busdevfn );
