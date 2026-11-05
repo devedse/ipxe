@@ -38,6 +38,57 @@ FILE_SECBOOT ( PERMITTED );
  *
  * Dynamic memory allocation
  *
+ * @anchor malloc
+ *
+ * Memory allocation via malloc() is provided using a simple
+ * free-block list in a fixed-size heap.
+ *
+ * The standard C semantics are supported.  Calling realloc() with a
+ * size of zero is a valid way to free a block.  Calling malloc() or
+ * realloc() with a size of zero will return a non-NULL value that can
+ * safely be passed to free() (meaning that callers can always treat a
+ * NULL return value as an error, without having to special-case a
+ * zero-length allocation).
+ *
+ * (The POSIX semantics of setting a global @c errno variable on
+ * allocation failure are not supported: callers should check for a
+ * NULL return value and then return -ENOMEM as per the usual iPXE
+ * error propagation conventions.)
+ *
+ * Memory allocation assumes that all input parameters are untrusted
+ * and must be checked.  In particular, buffer sizes are frequently
+ * derived from untrusted input obtained via the network (e.g. an HTTP
+ * Content-Length header).
+ *
+ * In contrast, memory deallocation assumes that the caller is always
+ * passing in a valid pointer value.
+ *
+ * The internal heap is relatively small.  Allocation is expected to
+ * sometimes fail in normal operation, and all callers must be
+ * prepared to handle it cleanly.  Device drivers attempting to
+ * allocate receive buffers to refill a receive ring can simply exit
+ * the refill loop and do nothing until the next refill opportunity.
+ * Other callers will generally have to treat allocation failure as
+ * fatal and cleanly terminate their operation (e.g. by closing a
+ * connection).
+ *
+ * The same internal heap supports both size-tracked allocations
+ * (using malloc()/free()) and known-size allocations (using
+ * malloc_phys()/free_phys(), where the caller must pass the original
+ * size when freeing the block).  The latter are typically used for
+ * I/O buffers, driver descriptor rings, and other hardware-facing
+ * structures.
+ *
+ * Depending upon the build platform, the underlying heap
+ * implementation may also be used to support external ("user")
+ * allocations using umalloc() and ufree().
+ *
+ * A cache discard mechanism exists to attempt to alleviate memory
+ * pressure by discarding cached information (such as packets held in
+ * a TCP out-of-order receive queue) when an allocation attempt would
+ * otherwise fail.  Code that holds pointers to discardable objects
+ * must be careful not to call any allocation functions.
+ *
  */
 
 /** A free block of memory */
@@ -277,31 +328,36 @@ static void * heap_alloc_block ( struct heap *heap, size_t size, size_t align,
 	void *ptr;
 
 	/* Sanity checks */
-	assert ( size != 0 );
-	assert ( ( align == 0 ) || ( ( align & ( align - 1 ) ) == 0 ) );
 	valgrind_make_blocks_defined ( heap );
 	check_blocks ( heap );
 
+	/* Validate inputs */
+	if ( ( size == 0 ) || ( align == 0 ) || ( align & ( align - 1 ) ) ) {
+		/* This is unreachable from any of our callers and
+		 * could instead be an assertion, but we perform a
+		 * runtime check anyway to guard against future
+		 * possible code changes.
+		 */
+		DBGC ( heap, "HEAP malformed allocation %#zx (aligned "
+		       "%#zx+%#zx)\n", size, align, offset );
+		ptr = NULL;
+		goto done;
+	}
+
 	/* Limit offset to requested alignment */
-	offset &= ( align ? ( align - 1 ) : 0 );
+	offset &= ( align - 1 );
 
 	/* Calculate offset of memory block */
 	actual_offset = ( offset & ~( heap->align - 1 ) );
 	assert ( actual_offset <= offset );
 
-	/* Calculate size of memory block */
+	/* Calculate size of memory block and check for overflow */
 	actual_size = ( ( size + offset - actual_offset + heap->align - 1 )
 			& ~( heap->align - 1 ) );
-	if ( ! actual_size ) {
-		/* The requested size is not permitted to be zero.  A
-		 * zero result at this point indicates that either the
-		 * original requested size was zero, or that unsigned
-		 * integer overflow has occurred.
-		 */
+	if ( actual_size < size ) {
 		ptr = NULL;
 		goto done;
 	}
-	assert ( actual_size >= size );
 
 	/* Calculate alignment mask */
 	align_mask = ( ( align - 1 ) | ( heap->align - 1 ) );
@@ -673,6 +729,32 @@ void * zalloc ( size_t size ) {
 }
 
 /**
+ * Clear and free memory
+ *
+ * @v ptr		Memory allocated by malloc(), or NULL
+ *
+ * If @c ptr is NULL, no action is taken.
+ */
+void zfree ( void *ptr ) {
+	struct autosized_block *block;
+
+	if ( ptr && ( ptr != NOWHERE ) ) {
+		block = container_of ( ptr, struct autosized_block, data );
+		VALGRIND_MAKE_MEM_DEFINED ( &block->size,
+					    sizeof ( block->size ) );
+		assert ( block->size >= sizeof ( *block ) );
+		memset ( ptr, 0, ( block->size - sizeof ( *block ) ) );
+		VALGRIND_MAKE_MEM_NOACCESS ( &block->size,
+					     sizeof ( block->size ) );
+	}
+	free ( ptr );
+	if ( ASSERTED ) {
+		DBGC ( &heap, "HEAP detected possible memory corruption "
+		       "from %p\n", __builtin_return_address ( 0 ) );
+	}
+}
+
+/**
  * Allocate memory with specified physical alignment and offset
  *
  * @v size		Requested size
@@ -685,11 +767,11 @@ void * zalloc ( size_t size ) {
 void * malloc_phys_offset ( size_t size, size_t phys_align, size_t offset ) {
 	void * ptr;
 
+	assert ( phys_align != 0 );
 	ptr = heap_alloc_block ( &heap, size, phys_align, offset );
 	if ( ptr && size ) {
-		assert ( ( phys_align == 0 ) ||
-			 ( ( ( virt_to_phys ( ptr ) ^ offset ) &
-			     ( phys_align - 1 ) ) == 0 ) );
+		assert ( ( ( virt_to_phys ( ptr ) ^ offset ) &
+			   ( phys_align - 1 ) ) == 0 );
 		VALGRIND_MALLOCLIKE_BLOCK ( ptr, size, 0, 0 );
 	}
 	return ptr;

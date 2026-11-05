@@ -486,18 +486,18 @@ void x25519_multiply ( const union x25519_oct258 *multiplicand,
 	 *         = step2(low 256 bits) + step2(high 11 bits) * 38    (mod p)
 	 *
 	 * There are 6 bits in the constant value 38.  The step 3
-	 * multiplication product will therefore have 11+6=19 bits,
+	 * multiplication product will therefore have 11+6=17 bits,
 	 * and the step 3 result (after the addition) will therefore
 	 * have 257 bits.
 	 *
 	 * A loose upper bound for the step 3 result (after the
 	 * addition) is given by:
 	 *
-	 *   step3 < ( 2^256 - 1 ) + ( 2^19 - 1 )
-	 *         < ( 2^257 - 2^256 - 1 ) + ( 2^19 - 1 )
-	 *         < ( 2^257 - 76 ) - 2^256 + 2^19 + 74
-	 *         < 4 * ( 2^255 - 19 ) - 2^256 + 2^19 + 74
-	 *         < 4p - 2^256 + 2^19 + 74
+	 *   step3 < ( 2^256 - 1 ) + ( 2^17 - 1 )
+	 *         < ( 2^257 - 2^256 - 1 ) + ( 2^17 - 1 )
+	 *         < ( 2^257 - 76 ) - 2^256 + 2^17 + 74
+	 *         < 4 * ( 2^255 - 19 ) - 2^256 + 2^17 + 74
+	 *         < 4p - 2^256 + 2^17 + 74
 	 *
 	 * and so the step 3 result is strictly less than 4p, and
 	 * therefore lies within the range [0,4p-1].
@@ -820,6 +820,7 @@ void x25519_key ( const struct x25519_value *base,
 	/* Clamp scalar as required by RFC7748 */
 	memcpy ( tmp, scalar, sizeof ( *tmp ) );
 	tmp->raw[0] &= 0xf8;
+	tmp->raw[31] &= 0x7f;
 	tmp->raw[31] |= 0x40;
 
 	/* Multiply elliptic curve point */
@@ -831,27 +832,34 @@ void x25519_key ( const struct x25519_value *base,
 }
 
 /**
- * Calculate public key
+ * Share public key
  *
+ * @v exchange		Key exchange algorithm
  * @v private		Private key
  * @v public		Public key to fill in
+ * @ret rc		Return status code
  */
-static void x25519_public ( const void *private, void *public ) {
+static int x25519_share ( struct exchange_algorithm *exchange __unused,
+			  const void *private, void *public ) {
 
 	/* Calculate public key */
 	x25519_key ( &x25519_generator, private, public );
+
+	return 0;
 }
 
 /**
- * Calculate shared secret
+ * Agree shared secret
  *
+ * @v exchange		Key exchange algorithm
  * @v private		Private key
  * @v partner		Partner public key
  * @v shared		Shared secret to fill in
  * @ret rc		Return status code
  */
-static int x25519_shared ( const void *private, const void *partner,
-			   void *shared ) {
+static int x25519_agree ( struct exchange_algorithm *exchange __unused,
+			  const void *private, const void *partner,
+			  void *shared ) {
 
 	/* Calculate shared secret */
 	x25519_key ( partner, private, shared );
@@ -869,6 +877,6 @@ struct exchange_algorithm x25519_algorithm = {
 	.privsize = sizeof ( struct x25519_value ),
 	.pubsize = sizeof ( struct x25519_value ),
 	.sharedsize = sizeof ( struct x25519_value ),
-	.public = x25519_public,
-	.shared = x25519_shared,
+	.share = x25519_share,
+	.agree = x25519_agree,
 };

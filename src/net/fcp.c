@@ -326,7 +326,7 @@ static int fcpcmd_send_cmnd ( struct fcp_command *fcpcmd ) {
 	int rc;
 
 	/* Sanity check */
-	if ( command->data_in_len && command->data_out_len ) {
+	if ( command->data_in.len && command->data_out.len ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x cannot handle bidirectional "
 		       "command\n", fcpdev, fcpcmd->xchg_id );
 		return -ENOTSUP;
@@ -344,13 +344,13 @@ static int fcpcmd_send_cmnd ( struct fcp_command *fcpcmd ) {
 	cmnd = iob_put ( iobuf, sizeof ( *cmnd ) );
 	memset ( cmnd, 0, sizeof ( *cmnd ) );
 	memcpy ( &cmnd->lun, &command->lun, sizeof ( cmnd->lun ) );
-	assert ( ! ( command->data_in_len && command->data_out_len ) );
-	if ( command->data_in_len )
+	assert ( ! ( command->data_in.len && command->data_out.len ) );
+	if ( command->data_in.len )
 		cmnd->dirn |= FCP_CMND_RDDATA;
-	if ( command->data_out_len )
+	if ( command->data_out.len )
 		cmnd->dirn |= FCP_CMND_WRDATA;
 	memcpy ( &cmnd->cdb, &fcpcmd->command.cdb, sizeof ( cmnd->cdb ) );
-	cmnd->len = htonl ( command->data_in_len + command->data_out_len );
+	cmnd->len = htonl ( command->data_in.len + command->data_out.len );
 	memset ( &meta, 0, sizeof ( meta ) );
 	meta.flags = ( XFER_FL_CMD_STAT | XFER_FL_OVER );
 	DBGC2 ( fcpdev, "FCP %p xchg %04x CMND " SCSI_CDB_FORMAT " %04x\n",
@@ -402,20 +402,18 @@ static int fcpcmd_recv_rddata ( struct fcp_command *fcpcmd,
 		rc = -ERANGE_READ_DATA_ORDERING;
 		goto done;
 	}
-	if ( ( offset + len ) > command->data_in_len ) {
-		DBGC ( fcpdev, "FCP %p xchg %04x read data overrun (max %zd, "
-		       "received %zd)\n", fcpdev, fcpcmd->xchg_id,
-		       command->data_in_len, ( offset + len ) );
-		rc = -ERANGE_READ_DATA_OVERRUN;
-		goto done;
-	}
 	DBGC2 ( fcpdev, "FCP %p xchg %04x RDDATA [%08zx,%08zx)\n",
 		fcpdev, fcpcmd->xchg_id, offset, ( offset + len ) );
 
 	/* Copy to user buffer */
-	memcpy ( ( command->data_in + offset ), iobuf->data, len );
+	if ( ( rc = xferbuf_write ( &command->data_in, offset,
+				    iobuf->data, len ) ) != 0 ) {
+		DBGC ( fcpdev, "FCP %p xchg %04x buffer overrun: %s\n",
+		       fcpdev, fcpcmd->xchg_id, strerror ( rc ) );
+		goto done;
+	}
 	fcpcmd->offset += len;
-	assert ( fcpcmd->offset <= command->data_in_len );
+	assert ( fcpcmd->offset <= command->data_in.len );
 
 	rc = 0;
  done:
@@ -446,13 +444,8 @@ static int fcpcmd_send_wrdata ( struct fcp_command *fcpcmd ) {
 	if ( len == 0 ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x write data stuck\n",
 		       fcpdev, fcpcmd->xchg_id );
-		return -ERANGE_WRITE_DATA_STUCK;
-	}
-	if ( ( fcpcmd->offset + len ) > command->data_out_len ) {
-		DBGC ( fcpdev, "FCP %p xchg %04x write data overrun (max %zd, "
-		       "requested %zd)\n", fcpdev, fcpcmd->xchg_id,
-		       command->data_out_len, ( fcpcmd->offset + len ) );
-		return -ERANGE_WRITE_DATA_OVERRUN;
+		rc = -ERANGE_WRITE_DATA_STUCK;
+		goto err_sanity;
 	}
 
 	/* Allocate I/O buffer */
@@ -460,12 +453,14 @@ static int fcpcmd_send_wrdata ( struct fcp_command *fcpcmd ) {
 	if ( ! iobuf ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x cannot allocate write data "
 		       "IU for %zd bytes\n", fcpdev, fcpcmd->xchg_id, len );
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto err_alloc;
 	}
 
 	/* Construct data IU frame */
-	memcpy ( iob_put ( iobuf, len ),
-		 ( command->data_out + fcpcmd->offset ), len );
+	if ( ( rc = xferbuf_read ( &command->data_out, fcpcmd->offset,
+				   iob_put ( iobuf, len ), len ) ) != 0 )
+		goto err_read;
 	memset ( &meta, 0, sizeof ( meta ) );
 	meta.flags = ( XFER_FL_RESPONSE | XFER_FL_ABS_OFFSET );
 	meta.offset = fcpcmd->offset;
@@ -477,7 +472,7 @@ static int fcpcmd_send_wrdata ( struct fcp_command *fcpcmd ) {
 	assert ( len <= fcpcmd->remaining );
 	fcpcmd->offset += len;
 	fcpcmd->remaining -= len;
-	assert ( fcpcmd->offset <= command->data_out_len );
+	assert ( fcpcmd->offset <= command->data_out.len );
 	if ( fcpcmd->remaining == 0 ) {
 		fcpcmd_stop_send ( fcpcmd );
 		meta.flags |= XFER_FL_OVER;
@@ -488,10 +483,17 @@ static int fcpcmd_send_wrdata ( struct fcp_command *fcpcmd ) {
 				   &meta ) ) != 0 ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x cannot deliver write data "
 		       "IU: %s\n", fcpdev, fcpcmd->xchg_id, strerror ( rc ) );
-		return rc;
+		goto err_deliver;
 	}
 
 	return 0;
+
+ err_deliver:
+ err_read:
+	free_iob ( iobuf );
+ err_alloc:
+ err_sanity:
+	return rc;
 }
 
 /**
@@ -506,7 +508,7 @@ static int fcpcmd_recv_xfer_rdy ( struct fcp_command *fcpcmd,
 				  struct io_buffer *iobuf,
 				  struct xfer_metadata *meta __unused ) {
 	struct fcp_device *fcpdev = fcpcmd->fcpdev;
-	struct fcp_xfer_rdy *xfer_rdy = iobuf->data;
+	struct fcp_xfer_rdy *xfer_rdy;
 	int rc;
 
 	/* Sanity checks */
@@ -517,6 +519,7 @@ static int fcpcmd_recv_xfer_rdy ( struct fcp_command *fcpcmd,
 		rc = -EPROTO;
 		goto done;
 	}
+	xfer_rdy = iobuf->data;
 	if ( ntohl ( xfer_rdy->offset ) != fcpcmd->offset ) {
 		/* We do not advertise out-of-order delivery */
 		DBGC ( fcpdev, "FCP %p xchg %04x cannot support out-of-order "
@@ -553,48 +556,75 @@ static int fcpcmd_recv_rsp ( struct fcp_command *fcpcmd,
 			     struct xfer_metadata *meta __unused ) {
 	struct fcp_device *fcpdev = fcpcmd->fcpdev;
 	struct scsi_cmd *command = &fcpcmd->command;
-	struct fcp_rsp *rsp = iobuf->data;
+	struct fcp_rsp *rsp;
 	struct scsi_rsp response;
+	void *response_data;
+	void *sense_data;
+	size_t response_data_len;
+	size_t sense_data_len;
+	size_t remaining;
 	int rc;
 
-	/* Sanity check */
-	if ( ( iob_len ( iobuf ) < sizeof ( *rsp ) ) ||
-	     ( iob_len ( iobuf ) < ( sizeof ( *rsp ) +
-				     fcp_rsp_response_data_len ( rsp ) +
-				     fcp_rsp_sense_data_len ( rsp ) ) ) ) {
+	/* Parse response */
+	remaining = iob_len ( iobuf );
+	if ( remaining < sizeof ( *rsp ) ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x received invalid response "
 		       "IU:\n", fcpdev, fcpcmd->xchg_id );
 		DBGC_HDA ( fcpdev, 0, iobuf->data, iob_len ( iobuf ) );
 		rc = -EPROTO;
 		goto done;
 	}
+	rsp = iobuf->data;
+	remaining -= sizeof ( *rsp );
 	DBGC2 ( fcpdev, "FCP %p xchg %04x RSP stat %02x resid %08x flags %02x"
 		"%s%s%s%s\n", fcpdev, fcpcmd->xchg_id, rsp->status,
 		ntohl ( rsp->residual ), rsp->flags,
 		( ( rsp->flags & FCP_RSP_RESPONSE_LEN_VALID ) ? " resp" : "" ),
 		( ( rsp->flags & FCP_RSP_SENSE_LEN_VALID ) ? " sense" : "" ),
 		( ( rsp->flags & FCP_RSP_RESIDUAL_OVERRUN ) ? " over" : "" ),
-		( ( rsp->flags & FCP_RSP_RESIDUAL_UNDERRUN ) ? " under" : "" ));
-	if ( fcp_rsp_response_data ( rsp ) ) {
+		( ( rsp->flags & FCP_RSP_RESIDUAL_UNDERRUN ) ? " under" : ""));
+
+	/* Parse response data */
+	response_data_len = fcp_rsp_response_data_len ( rsp );
+	if ( remaining < response_data_len ) {
+		DBGC ( fcpdev, "FCP %p xchg %04x received overlength "
+		       "response data:\n", fcpdev, fcpcmd->xchg_id );
+		DBGC_HDA ( fcpdev, 0, iobuf->data, iob_len ( iobuf ) );
+		rc = -EPROTO;
+		goto done;
+	}
+	response_data = fcp_rsp_response_data ( rsp );
+	if ( response_data ) {
 		DBGC2 ( fcpdev, "FCP %p xchg %04x response data:\n",
 			fcpdev, fcpcmd->xchg_id );
-		DBGC2_HDA ( fcpdev, 0, fcp_rsp_response_data ( rsp ),
-			    fcp_rsp_response_data_len ( rsp ) );
+		DBGC2_HDA ( fcpdev, 0, response_data, response_data_len );
 	}
-	if ( fcp_rsp_sense_data ( rsp ) ) {
+	remaining -= response_data_len;
+
+	/* Parse sense data */
+	sense_data_len = fcp_rsp_sense_data_len ( rsp );
+	if ( remaining < sense_data_len ) {
+		DBGC ( fcpdev, "FCP %p xchg %04x received overlength "
+		       "sense data:\n", fcpdev, fcpcmd->xchg_id );
+		DBGC_HDA ( fcpdev, 0, iobuf->data, iob_len ( iobuf ) );
+		rc = -EPROTO;
+		goto done;
+	}
+	sense_data = fcp_rsp_sense_data ( rsp );
+	if ( sense_data ) {
 		DBGC2 ( fcpdev, "FCP %p xchg %04x sense data:\n",
 			fcpdev, fcpcmd->xchg_id );
-		DBGC2_HDA ( fcpdev, 0, fcp_rsp_sense_data ( rsp ),
-			    fcp_rsp_sense_data_len ( rsp ) );
+		DBGC2_HDA ( fcpdev, 0, sense_data, sense_data_len );
 	}
+	remaining -= sense_data_len;
 
 	/* Check for locally-detected command underrun */
 	if ( ( rsp->status == 0 ) &&
-	     ( fcpcmd->offset != ( command->data_in_len +
-				   command->data_out_len ) ) ) {
+	     ( fcpcmd->offset != ( command->data_in.len +
+				   command->data_out.len ) ) ) {
 		DBGC ( fcpdev, "FCP %p xchg %04x data underrun (expected %zd, "
 		       "got %zd)\n", fcpdev, fcpcmd->xchg_id,
-		       ( command->data_in_len + command->data_out_len ),
+		       ( command->data_in.len + command->data_out.len ),
 		       fcpcmd->offset );
 		rc = -ERANGE_DATA_UNDERRUN;
 		goto done;
@@ -609,8 +639,7 @@ static int fcpcmd_recv_rsp ( struct fcp_command *fcpcmd,
 		if ( rsp->flags & FCP_RSP_RESIDUAL_UNDERRUN )
 			response.overrun = -response.overrun;
 	}
-	scsi_parse_sense ( fcp_rsp_sense_data ( rsp ),
-			   fcp_rsp_sense_data_len ( rsp ), &response.sense );
+	scsi_parse_sense ( sense_data, sense_data_len, &response.sense );
 
 	/* Free buffer before sending response, to minimise
 	 * out-of-memory errors.

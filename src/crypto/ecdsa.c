@@ -80,6 +80,8 @@ struct asn1_algorithm ecpubkey_algorithm __asn1_algorithm = {
 
 /** An ECDSA key */
 struct ecdsa_key {
+	/** Elliptic curve algorithm */
+	struct asn1_algorithm *algorithm;
 	/** Elliptic curve */
 	struct elliptic_curve *curve;
 	/** Public curve point */
@@ -140,7 +142,6 @@ struct ecdsa_context {
  */
 static int ecdsa_parse_key ( struct ecdsa_key *key,
 			     const struct asn1_cursor *raw ) {
-	struct asn1_algorithm *algorithm;
 	struct asn1_cursor cursor;
 	struct asn1_cursor curve;
 	struct asn1_cursor private;
@@ -213,15 +214,16 @@ static int ecdsa_parse_key ( struct ecdsa_key *key,
 
 	/* Identify curve */
 	if ( ( rc = asn1_curve_algorithm ( &curve, &ecpubkey_algorithm,
-					   &algorithm ) ) != 0 ) {
+					   &key->algorithm ) ) != 0 ) {
 		DBGC ( key, "ECDSA %p unknown curve: %s\n",
 		       key, strerror ( rc ) );
 		DBGC_HDA ( key, 0, raw->data, raw->len );
 		return rc;
 	}
-	key->curve = algorithm->curve;
-	DBGC ( key, "ECDSA %p is a %s (%s) %s key\n", key, algorithm->name,
-	       key->curve->name, ( is_private ? "private" : "public" ) );
+	key->curve = key->algorithm->curve;
+	DBGC ( key, "ECDSA %p is a %s (%s) %s key\n",
+	       key, key->algorithm->name, key->curve->name,
+	       ( is_private ? "private" : "public" ) );
 
 	/* Check public key length */
 	if ( cursor.len != ( sizeof ( *compression ) +
@@ -283,7 +285,7 @@ static int ecdsa_parse_key ( struct ecdsa_key *key,
  * @v ctx		ECDSA context
  * @v rs0		Element 0 of signature "r" or "s" value
  * @v raw		ASN.1 cursor
- * @ret rc		Return status code
+ * @ret len		Canonical length of "r"/"s", or negative error
  */
 static int ecdsa_parse_signature ( struct ecdsa_context *ctx,
 				   bigint_element_t *rs0,
@@ -295,6 +297,8 @@ static int ecdsa_parse_signature ( struct ecdsa_context *ctx,
 	bigint_t ( size ) __attribute__ (( may_alias )) *rs =
 		( ( void * ) rs0 );
 	struct asn1_cursor cursor;
+	uint8_t msb;
+	size_t len;
 	int rc;
 
 	/* Enter integer */
@@ -320,7 +324,12 @@ static int ecdsa_parse_signature ( struct ecdsa_context *ctx,
 		return -ERANGE;
 	}
 
-	return 0;
+	/* Calculate canonical length */
+	msb = *( ( const uint8_t * ) cursor.data );
+	len = ( cursor.len + ( ( msb & 0x80 ) ? 1 : 0 ) );
+	len += asn1_header_len ( len );
+
+	return len;
 }
 
 /**
@@ -425,7 +434,7 @@ static int ecdsa_alloc ( struct ecdsa_context *ctx ) {
 static void ecdsa_free ( struct ecdsa_context *ctx ) {
 
 	/* Free dynamic storage */
-	free ( ctx->dynamic );
+	zfree ( ctx->dynamic );
 }
 
 /**
@@ -768,13 +777,15 @@ static int ecdsa_verify_rs ( struct ecdsa_context *ctx ) {
 /**
  * Sign digest value using ECDSA
  *
+ * @v pubkey		Public-key algorithm
  * @v key		Key
  * @v digest		Digest algorithm
  * @v value		Digest value
  * @v signature		Signature
  * @ret rc		Return status code
  */
-static int ecdsa_sign ( const struct asn1_cursor *key,
+static int ecdsa_sign ( struct pubkey_algorithm *pubkey __unused,
+			const struct asn1_cursor *key,
 			struct digest_algorithm *digest, const void *value,
 			struct asn1_builder *signature ) {
 	struct ecdsa_context ctx;
@@ -824,17 +835,22 @@ static int ecdsa_sign ( const struct asn1_cursor *key,
 /**
  * Verify signed digest using ECDSA
  *
+ * @v pubkey		Public-key algorithm
  * @v key		Key
  * @v digest		Digest algorithm
  * @v value		Digest value
  * @v signature		Signature
  * @ret rc		Return status code
  */
-static int ecdsa_verify ( const struct asn1_cursor *key,
+static int ecdsa_verify ( struct pubkey_algorithm *pubkey __unused,
+			  const struct asn1_cursor *key,
 			  struct digest_algorithm *digest, const void *value,
 			  const struct asn1_cursor *signature ) {
 	struct ecdsa_context ctx;
 	struct asn1_cursor cursor;
+	int rlen;
+	int slen;
+	size_t len;
 	int rc;
 
 	/* Initialise context */
@@ -846,11 +862,25 @@ static int ecdsa_verify ( const struct asn1_cursor *key,
 	asn1_enter ( &cursor, ASN1_SEQUENCE );
 
 	/* Extract "r" and "s" values */
-	if ( ( rc = ecdsa_parse_signature ( &ctx, ctx.r0, &cursor ) ) != 0 )
-		goto err_r;
+	if ( ( rlen = ecdsa_parse_signature ( &ctx, ctx.r0, &cursor ) ) < 0 ) {
+		rc = rlen;
+		goto err_parse;
+	}
 	asn1_skip_any ( &cursor );
-	if ( ( rc = ecdsa_parse_signature ( &ctx, ctx.s0, &cursor ) ) != 0 )
-		goto err_s;
+	if ( ( slen = ecdsa_parse_signature ( &ctx, ctx.s0, &cursor ) ) < 0 ) {
+		rc = slen;
+		goto err_parse;
+	}
+
+	/* Check for any extraneous content in signature */
+	len = ( rlen + slen );
+	len += asn1_header_len ( len );
+	if ( len != signature->len ) {
+		DBGC ( &ctx, "ECDSA %p non-canonical signature:\n", &ctx );
+		DBGC_HDA ( &ctx, 0, signature->data, signature->len );
+		rc = -EINVAL_SIGNATURE;
+		goto err_parse;
+	}
 
 	/* Verify signature */
 	if ( ( rc = ecdsa_verify_rs ( &ctx ) ) != 0 )
@@ -862,8 +892,7 @@ static int ecdsa_verify ( const struct asn1_cursor *key,
 	return 0;
 
  err_verify:
- err_s:
- err_r:
+ err_parse:
 	ecdsa_free ( &ctx );
  err_init:
 	return rc;
@@ -872,31 +901,57 @@ static int ecdsa_verify ( const struct asn1_cursor *key,
 /**
  * Check for matching ECDSA public/private key pair
  *
+ * @v pubkey		Public-key algorithm
  * @v private_key	Private key
  * @v public_key	Public key
  * @ret rc		Return status code
  */
-static int ecdsa_match ( const struct asn1_cursor *private_key,
+static int ecdsa_match ( struct pubkey_algorithm *pubkey __unused,
+			 const struct asn1_cursor *private_key,
 			 const struct asn1_cursor *public_key ) {
 	struct elliptic_curve *curve;
-	struct ecdsa_key privkey;
-	struct ecdsa_key pubkey;
+	struct ecdsa_key private;
+	struct ecdsa_key public;
 	int rc;
 
 	/* Parse keys */
-	if ( ( rc = ecdsa_parse_key ( &privkey, private_key ) ) != 0 )
+	if ( ( rc = ecdsa_parse_key ( &private, private_key ) ) != 0 )
 		return rc;
-	if ( ( rc = ecdsa_parse_key ( &pubkey, public_key ) ) != 0 )
+	if ( ( rc = ecdsa_parse_key ( &public, public_key ) ) != 0 )
 		return rc;
 
 	/* Compare curves */
-	if ( privkey.curve != pubkey.curve )
+	if ( private.curve != public.curve )
 		return -ENOTTY;
-	curve = privkey.curve;
+	curve = private.curve;
 
 	/* Compare public curve points */
-	if ( memcmp ( privkey.public, pubkey.public, curve->pointsize ) != 0 )
+	if ( memcmp ( private.public, public.public, curve->pointsize ) != 0 )
 		return -ENOTTY;
+
+	return 0;
+}
+
+/**
+ * Identify ECDSA algorithm parameter
+ *
+ * @v pubkey		Public-key algorithm
+ * @v key		Key
+ * @v parameter		Algorithm parameter to fill in
+ * @ret rc		Return status code
+ */
+static int ecdsa_param ( struct pubkey_algorithm *pubkey __unused,
+			 const struct asn1_cursor *key,
+			 struct asn1_algorithm **parameter ) {
+	struct ecdsa_key parsed;
+	int rc;
+
+	/* Fill in algorithm parameter, if identifiable */
+	if ( ( rc = ecdsa_parse_key ( &parsed, key ) ) == 0 ) {
+		*parameter = parsed.algorithm;
+	} else {
+		*parameter = NULL;
+	}
 
 	return 0;
 }
@@ -909,4 +964,5 @@ struct pubkey_algorithm ecdsa_algorithm = {
 	.sign		= ecdsa_sign,
 	.verify		= ecdsa_verify,
 	.match		= ecdsa_match,
+	.param		= ecdsa_param,
 };

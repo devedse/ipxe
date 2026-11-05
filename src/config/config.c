@@ -82,6 +82,9 @@ REQUIRE_OBJECT ( debugcon );
 #ifdef CONSOLE_SBI
 REQUIRE_OBJECT ( sbi_console );
 #endif
+#ifdef CONSOLE_DMESG
+REQUIRE_OBJECT ( dmesg );
+#endif
 
 /*
  * Drag in all requested network protocols
@@ -126,6 +129,9 @@ REQUIRE_OBJECT ( nfs_open );
 #endif
 #ifdef DOWNLOAD_PROTO_SLAM
 REQUIRE_OBJECT ( slam );
+#endif
+#ifdef DOWNLOAD_PROTO_DATA
+REQUIRE_OBJECT ( datauri );
 #endif
 
 /*
@@ -194,6 +200,9 @@ REQUIRE_OBJECT ( gzip );
 #endif
 #ifdef IMAGE_UCODE
 REQUIRE_OBJECT ( ucode );
+#endif
+#ifdef IMAGE_MIME
+REQUIRE_OBJECT ( mime );
 #endif
 
 /*
@@ -305,6 +314,9 @@ REQUIRE_OBJECT ( image_crypt_cmd );
 #endif
 #ifdef FDT_CMD
 REQUIRE_OBJECT ( fdt_cmd );
+#endif
+#ifdef IMAGE_SET_CMD
+REQUIRE_OBJECT ( image_set_cmd );
 #endif
 
 /*

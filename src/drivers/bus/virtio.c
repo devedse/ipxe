@@ -409,6 +409,13 @@ static int virtio_pci_cap ( struct virtio_device *virtio,
 		if ( reg > PCI_BASE_ADDRESS_5 )
 			continue;
 
+		/* Check BAR accessibility */
+		if ( ! pci_bar_start ( pci, reg ) ) {
+			DBGC ( virtio, "VIRTIO %s capability type %d BAR%d is "
+			       "not usable\n", virtio->name, type, cap->bar );
+			continue;
+		}
+
 		/* Success */
 		cap->pos = pos;
 		return 0;
@@ -488,7 +495,7 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 	/* Check if MSI-X is enabled */
 	msix = pci_find_capability ( pci, PCI_CAP_ID_MSIX );
 	if ( msix ) {
-		pci_read_config_word ( pci, msix, &ctrl );
+		pci_read_config_word ( pci, ( msix + PCI_MSIX_CTRL ), &ctrl );
 		if ( ! ( ctrl & PCI_MSIX_CTRL_ENABLE ) )
 			msix = 0;
 	}

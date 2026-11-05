@@ -393,6 +393,7 @@ static int x509_parse_public_key ( struct x509_certificate *cert,
 				   const struct asn1_cursor *raw ) {
 	struct x509_public_key *public_key = &cert->subject.public_key;
 	struct asn1_algorithm **algorithm = &public_key->algorithm;
+	struct asn1_algorithm **parameter = &public_key->parameter;
 	struct asn1_cursor *value = &public_key->value;
 	struct asn1_cursor cursor;
 	int rc;
@@ -416,6 +417,18 @@ static int x509_parse_public_key ( struct x509_certificate *cert,
 	DBGC2 ( cert, "X509 %p public key algorithm is %s\n",
 		cert, (*algorithm)->name );
 	asn1_skip_any ( &cursor );
+
+	/* Parse algorithm parameter (if any) */
+	if ( ( rc = pubkey_param ( (*algorithm)->pubkey, &public_key->raw,
+				   parameter ) ) != 0 ) {
+		DBGC ( cert, "X509 %p could not parse %s parameter: %s\n",
+		       cert, (*algorithm)->name, strerror ( rc ) );
+		return rc;
+	}
+	if ( *parameter ) {
+		DBGC2 ( cert, "X509 %p public key algorithm parameter is %s\n",
+			cert, (*parameter)->name );
+	}
 
 	/* Parse subjectPublicKey */
 	memcpy ( value, &cursor, sizeof ( *value ) );
@@ -524,7 +537,7 @@ static int x509_parse_key_usage ( struct x509_certificate *cert,
 	if ( len > sizeof ( usage->bits ) )
 		len = sizeof ( usage->bits );
 	for ( i = 0 ; i < len ; i++ ) {
-		usage->bits |= ( *(bytes++) << ( 8 * i ) );
+		usage->bits |= ( ( ( unsigned ) *(bytes++) ) << ( 8 * i ) );
 	}
 	DBGC2 ( cert, "X509 %p key usage is %08x\n", cert, usage->bits );
 
@@ -1696,6 +1709,26 @@ int x509_append_raw ( struct x509_chain *chain, const void *data,
 }
 
 /**
+ * Find link containing X.509 certificate
+ *
+ * @v chain		X.509 certificate chain
+ * @v cert		X.509 certificate
+ * @ret link		Link containing certificate, or NULL if not found
+ */
+struct x509_link * x509_link ( struct x509_chain *chain,
+			       struct x509_certificate *cert ) {
+	struct x509_link *link;
+
+	/* Find link in chain */
+	list_for_each_entry ( link, &chain->links, list ) {
+		if ( link->cert == cert )
+			return link;
+	}
+
+	return NULL;
+}
+
+/**
  * Truncate X.509 certificate chain
  *
  * @v chain		X.509 certificate chain
@@ -1846,7 +1879,7 @@ struct x509_certificate * x509_find_key ( struct x509_chain *store,
 
 		/* Check public key */
 		cert = link->cert;
-		if ( pubkey_match ( cert->signature_algorithm->pubkey,
+		if ( pubkey_match ( cert->subject.public_key.algorithm->pubkey,
 				    privkey_cursor ( key ),
 				    &cert->subject.public_key.raw ) == 0 )
 			return x509_found ( store, cert );

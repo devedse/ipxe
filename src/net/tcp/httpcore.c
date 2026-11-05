@@ -136,19 +136,46 @@ static struct http_transfer_encoding http_transfer_identity;
  */
 
 /** HTTP HEAD method */
-struct http_method http_head = {
+struct http_method http_head __http_method = {
 	.name = "HEAD",
+	.flags = 0,
 };
 
 /** HTTP GET method */
-struct http_method http_get = {
+struct http_method http_get __http_method = {
 	.name = "GET",
+	.flags = 0,
 };
 
 /** HTTP POST method */
-struct http_method http_post = {
+struct http_method http_post __http_method = {
 	.name = "POST",
+	.flags = HTTP_FL_REQ_BODY,
 };
+
+/** HTTP PUT method */
+struct http_method http_put __http_method = {
+	.name = "PUT",
+	.flags = HTTP_FL_REQ_BODY,
+};
+
+/**
+ * Identify HTTP method
+ *
+ * @v name		Method name
+ * @ret method		HTTP method, or NULL if not known
+ */
+static struct http_method * http_method ( const char *name ) {
+	struct http_method *method;
+
+	/* Identify method */
+	for_each_table_entry ( method, HTTP_METHODS ) {
+		if ( strcasecmp ( name, method->name ) == 0 )
+			return method;
+	}
+
+	return NULL;
+}
 
 /******************************************************************************
  *
@@ -931,6 +958,10 @@ static int http_format_headers ( struct http_transaction *http, char *buf,
 			used += ssnprintf ( ( buf + used ), ( len - used ),
 					    "%s: %s\r\n", param->key,
 					    param->value );
+			if ( used < len ) {
+				DBGC2 ( http, "HTTP %p TX %s: %s\n",
+					http, param->key, param->value );
+			}
 		}
 	}
 
@@ -1068,11 +1099,15 @@ static int http_format_content_length ( struct http_transaction *http,
 					char *buf, size_t len ) {
 
 	/* Construct content length, if applicable */
-	if ( http->request.content.len ) {
+	if ( http->request.method->flags & HTTP_FL_REQ_BODY ) {
 		return snprintf ( buf, len, "%zd", http->request.content.len );
-	} else {
+	} else if ( http->request.content.len == 0 ) {
 		return 0;
 	}
+
+	DBGC ( http, "HTTP %p cannot %s with a request body\n",
+	       http, http->request.method->name );
+	return -ENOTSUP;
 }
 
 /** HTTP "Content-Length" header */
@@ -1781,8 +1816,11 @@ static int http_rx_chunk_len ( struct http_transaction *http,
  */
 static int http_rx_chunk_data ( struct http_transaction *http,
 				struct io_buffer **iobuf ) {
+	struct {
+		uint8_t cr;
+		uint8_t lf;
+	} __attribute__ (( packed )) *crlf;
 	struct io_buffer *payload;
-	uint8_t *crlf;
 	size_t len;
 	int rc;
 
@@ -1791,12 +1829,16 @@ static int http_rx_chunk_data ( struct http_transaction *http,
 	 * (which we would ignore anyway) and hence avoid
 	 * unnecessarily copying the data.
 	 */
-	if ( iob_len ( *iobuf ) == ( http->remaining + 2 /* CRLF */ ) ) {
-		crlf = ( (*iobuf)->data + http->remaining );
-		if ( ( crlf[0] == '\r' ) && ( crlf[1] == '\n' ) )
-			iob_unput ( (*iobuf), 2 /* CRLF */ );
-	}
 	len = iob_len ( *iobuf );
+	if ( ( len >= sizeof ( *crlf ) ) &&
+	     ( ( len - sizeof ( *crlf ) ) == http->remaining ) ) {
+		crlf = ( (*iobuf)->data + http->remaining );
+		if ( ( crlf->cr == '\r' ) && ( crlf->lf == '\n' ) ) {
+			iob_unput ( *iobuf, sizeof ( *crlf ) );
+			len -= sizeof ( *crlf );
+		}
+	}
+	assert ( len == iob_len ( *iobuf ) );
 
 	/* Use whole/partial buffer as applicable */
 	if ( len <= http->remaining ) {
@@ -2021,6 +2063,17 @@ int http_open_uri ( struct interface *xfer, struct uri *uri ) {
 		data = NULL;
 	}
 
+	/* Use explicitly requested method name if applicable */
+	if ( params && params->method ) {
+		method = http_method ( params->method );
+		if ( ! method ) {
+			DBGC ( uri, "HTTP unsupported method \"%s\"\n",
+			       params->method );
+			rc = -ENOTSUP;
+			goto err_method;
+		}
+	}
+
 	/* Construct request content */
 	content.type = type;
 	content.data = data;
@@ -2031,6 +2084,7 @@ int http_open_uri ( struct interface *xfer, struct uri *uri ) {
 		goto err_open;
 
  err_open:
+ err_method:
 	free ( data );
  err_alloc:
 	return rc;

@@ -12,6 +12,7 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/bigint.h>
 #include <ipxe/crypto.h>
+#include <ipxe/elliptic.h>
 
 /** Number of axes in Weierstrass curve point representation */
 #define WEIERSTRASS_AXES 2
@@ -27,16 +28,22 @@ FILE_SECBOOT ( PERMITTED );
  * intermediate value.
  *
  * Relaxed Montgomery multiplication will produce a result in the
- * range t < (1+m/k)N, where m is this maximum multiple of the field
- * prime, and k is the constant in R > kN representing the leading
- * zero padding in the big integer representation of the field prime.
- * We choose to set k=m so that multiplications will always produce a
- * result in the range t < 2N.
+ * range t < (1+(m^2)/k)N, where m is this maximum multiple of the
+ * field prime, and k is the constant in R > kN representing the
+ * leading zero padding in the big integer representation of the field
+ * prime.  We choose to set k=m^2 so that multiplications will always
+ * produce a result in the range t < 2N.
+ *
+ * A lower value of k would be possible, at the cost of having to keep
+ * track of the field prime multiples used at each multiplication
+ * input (rather than keeping track only of a single global maximum).
+ * This would gain nothing in practice: any value of k below around
+ * 2^32 will end up requiring just a single extra big integer element.
  *
  * This is expressed as the base-two logarithm of the multiple
  * (rounded up), to simplify compile-time calculations.
  */
-#define WEIERSTRASS_MAX_MULTIPLE_LOG2 5 /* maximum reached is mod 20N */
+#define WEIERSTRASS_MAX_MULT_LOG2 5 /* maximum reached is mod 20N */
 
 /**
  * Determine number of elements in scalar values for a Weierstrass curve
@@ -46,7 +53,7 @@ FILE_SECBOOT ( PERMITTED );
  */
 #define weierstrass_size( len )						\
 	bigint_required_size ( (len) +					\
-			       ( ( WEIERSTRASS_MAX_MULTIPLE_LOG2 + 7 )	\
+			       ( ( 2 * WEIERSTRASS_MAX_MULT_LOG2 + 7 )	\
 				 / 8 ) )
 
 /**
@@ -66,37 +73,6 @@ FILE_SECBOOT ( PERMITTED );
 		bigint_t ( size * 2 ) xy;				\
 		bigint_t ( size * 3 ) all;				\
 	}
-
-/**
- * Define a Weierstrass raw affine co-ordinate type
- *
- * @v len		Length of scalar values
- * @ret type		Raw affine co-ordinate type
- */
-#define weierstrass_raw_t( len )					\
-	union {								\
-		uint8_t axis[2][ len ];					\
-		struct {						\
-			uint8_t x[ len ];				\
-			uint8_t y[ len ];				\
-		} __attribute__ (( packed ));				\
-		uint8_t xy[ len * 2 ];					\
-	}
-
-/**
- * Define a Weierstrass "uncompressed" affine co-ordinate type
- *
- * @v len		Length of scalar values
- * @ret type		Uncompressed affine co-ordinate type
- */
-#define weierstrass_uncompressed_t( len )				\
-	struct {							\
-		uint8_t format;						\
-		weierstrass_raw_t ( len );				\
-	} __attribute__ (( packed ))
-
-/** Format byte for Weierstrass curve point representation */
-#define WEIERSTRASS_FORMAT 0x04 /* "uncompressed" */
 
 /** Indexes for stored multiples of the field prime */
 enum weierstrass_multiple {
@@ -123,8 +99,6 @@ enum weierstrass_multiple {
 struct weierstrass_curve {
 	/** Number of elements in scalar values */
 	const unsigned int size;
-	/** Curve name */
-	const char *name;
 	/** Length of raw scalar values */
 	size_t len;
 	/** Field prime */
@@ -156,28 +130,27 @@ struct weierstrass_curve {
 	};
 };
 
-extern int weierstrass_is_infinity ( struct weierstrass_curve *curve,
+extern int weierstrass_is_infinity ( struct elliptic_curve *curve,
 				     const void *point );
-extern int weierstrass_multiply ( struct weierstrass_curve *curve,
+extern int weierstrass_multiply ( struct elliptic_curve *curve,
 				  const void *base, const void *scalar,
 				  void *result );
-extern int weierstrass_add_once ( struct weierstrass_curve *curve,
+extern int weierstrass_add_once ( struct elliptic_curve *curve,
 				  const void *addend, const void *augend,
 				  void *result );
-extern void weierstrass_public ( struct weierstrass_curve *curve,
-				 const void *private, void *public );
-extern int weierstrass_shared ( struct weierstrass_curve *curve,
-				const void *private, const void *partner,
-				void *shared );
+extern void weierstrass_share ( struct exchange_algorithm *exchange,
+				const void *private, void *public );
+extern int weierstrass_agree ( struct exchange_algorithm *exchange,
+			       const void *private, const void *partner,
+			       void *shared );
 
 /** Define a Weierstrass curve */
-#define WEIERSTRASS_CURVE( _name, _curve, _exchange, _len, _prime,	\
-			   _a, _b, _base, _order )			\
+#define WEIERSTRASS_CURVE( _name, _curve, _len, _prime, _a, _b, _base,	\
+			   _order )					\
 	static bigint_t ( weierstrass_size(_len) )			\
 		_name ## _cache[WEIERSTRASS_NUM_CACHED];		\
 	static struct weierstrass_curve _name ## _weierstrass = {	\
 		.size = weierstrass_size(_len),				\
-		.name = #_name,						\
 		.len = (_len),						\
 		.prime_raw = (_prime),					\
 		.a_raw = (_a),						\
@@ -194,49 +167,16 @@ extern int weierstrass_shared ( struct weierstrass_curve *curve,
 		.a = (_name ## _cache)[6].element,			\
 		.b3 = (_name ## _cache)[7].element,			\
 	};								\
-	static int _name ## _is_infinity ( const void *point) {		\
-		return weierstrass_is_infinity ( &_name ## _weierstrass,\
-						 point );		\
-	}								\
-	static int _name ## _multiply ( const void *base,		\
-					const void *scalar,		\
-					void *result ) {		\
-		return weierstrass_multiply ( &_name ## _weierstrass,	\
-					      base, scalar, result );	\
-	}								\
-	static int _name ## _add ( const void *addend,			\
-				   const void *augend, void *result) {	\
-		return weierstrass_add_once ( &_name ## _weierstrass,	\
-					      addend, augend, result );	\
-	}								\
-	static void _name ## _public ( const void *private,		\
-				       void *public ) {			\
-		weierstrass_public ( &_name ## _weierstrass,		\
-				     private, public );			\
-	}								\
-	static int _name ## _shared ( const void *private,		\
-				      const void *partner,		\
-				      void *shared ) {			\
-		return weierstrass_shared ( &_name ## _weierstrass,	\
-					    private, partner, shared );	\
-	}								\
 	struct elliptic_curve _curve = {				\
 		.name = #_name,						\
-		.pointsize = sizeof ( weierstrass_raw_t(_len) ),	\
+		.pointsize = ( (_len) * WEIERSTRASS_AXES ),		\
 		.keysize = (_len),					\
 		.base = (_base),					\
 		.order = (_order),					\
-		.is_infinity = _name ## _is_infinity,			\
-		.multiply = _name ## _multiply,				\
-		.add = _name ## _add,					\
-	};								\
-	struct exchange_algorithm _exchange = {				\
-		.name = #_name,						\
-		.privsize = (_len),					\
-		.pubsize = sizeof ( weierstrass_uncompressed_t(_len) ), \
-		.sharedsize = (_len),					\
-		.public = _name ## _public,				\
-		.shared = _name ## _shared,				\
+		.is_infinity = weierstrass_is_infinity,			\
+		.multiply = weierstrass_multiply,			\
+		.add = weierstrass_add_once,				\
+		.priv = &_name ## _weierstrass,				\
 	}
 
 #endif /* _IPXE_WEIERSTRASS_H */

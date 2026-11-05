@@ -466,6 +466,13 @@ struct dns_request {
 		struct sockaddr_in sin;
 		struct sockaddr_in6 sin6;
 	} address;
+	/** Current name server address */
+	union {
+		struct sockaddr sa;
+		struct sockaddr_tcpip st;
+		struct sockaddr_in sin;
+		struct sockaddr_in6 sin6;
+	} nameserver;
 	/** Initial query type */
 	uint16_t qtype;
 	/** Buffer for current query */
@@ -587,12 +594,6 @@ static int dns_question ( struct dns_request *dns ) {
  */
 static int dns_send_packet ( struct dns_request *dns ) {
 	struct dns_header *query = &dns->buf.query;
-	union {
-		struct sockaddr sa;
-		struct sockaddr_tcpip st;
-		struct sockaddr_in sin;
-		struct sockaddr_in6 sin6;
-	} nameserver;
 	struct xfer_metadata meta;
 	unsigned int index;
 
@@ -600,25 +601,25 @@ static int dns_send_packet ( struct dns_request *dns ) {
 	start_timer ( &dns->timer );
 
 	/* Construct DNS server address */
-	memset ( &nameserver, 0, sizeof ( nameserver ) );
-	nameserver.st.st_port = htons ( DNS_PORT );
+	memset ( &dns->nameserver, 0, sizeof ( dns->nameserver ) );
+	dns->nameserver.st.st_port = htons ( DNS_PORT );
 	if ( ! dns_count ) {
 		DBGC ( dns, "DNS %p lost DNS servers mid query\n", dns );
 		return -EINVAL;
 	}
 	index = ( dns->index % dns_count );
 	if ( index < dns6.count ) {
-		nameserver.sin6.sin6_family = AF_INET6;
-		memcpy ( &nameserver.sin6.sin6_addr, &dns6.in6[index],
-			 sizeof ( nameserver.sin6.sin6_addr ) );
+		dns->nameserver.sin6.sin6_family = AF_INET6;
+		memcpy ( &dns->nameserver.sin6.sin6_addr, &dns6.in6[index],
+			 sizeof ( dns->nameserver.sin6.sin6_addr ) );
 	} else {
-		nameserver.sin.sin_family = AF_INET;
-		nameserver.sin.sin_addr = dns4.in[index - dns6.count];
+		dns->nameserver.sin.sin_family = AF_INET;
+		dns->nameserver.sin.sin_addr = dns4.in[index - dns6.count];
 	}
 
 	/* Construct metadata */
 	memset ( &meta, 0, sizeof ( meta ) );
-	meta.dest = &nameserver.sa;
+	meta.dest = &dns->nameserver.sa;
 
 	/* Generate query identifier if applicable */
 	if ( ! query->id )
@@ -626,7 +627,7 @@ static int dns_send_packet ( struct dns_request *dns ) {
 
 	/* Send query */
 	DBGC ( dns, "DNS %p sending %s query ID %#04x for %s type %s\n", dns,
-	       sock_ntoa ( &nameserver.sa ), ntohs ( query->id ),
+	       sock_ntoa ( &dns->nameserver.sa ), ntohs ( query->id ),
 	       dns_name ( &dns->name ), dns_type ( dns->question->qtype ) );
 
 	/* Send the data */
@@ -668,16 +669,16 @@ static void dns_timer_expired ( struct retry_timer *timer, int fail ) {
 static int dns_xfer_deliver ( struct dns_request *dns,
 			      struct io_buffer *iobuf,
 			      struct xfer_metadata *meta __unused ) {
-	struct dns_header *response = iobuf->data;
 	struct dns_header *query = &dns->buf.query;
 	unsigned int qtype = dns->question->qtype;
+	struct dns_header *response;
 	struct dns_name buf;
 	union dns_rr *rr;
 	int offset;
 	size_t answer_offset;
 	size_t next_offset;
 	size_t rdlength;
-	size_t name_len;
+	int name_len;
 	int rc;
 
 	/* Sanity check */
@@ -687,6 +688,7 @@ static int dns_xfer_deliver ( struct dns_request *dns,
 		rc = -EINVAL;
 		goto done;
 	}
+	response = iobuf->data;
 
 	/* Check response ID matches query ID */
 	if ( response->id != query->id ) {
@@ -814,6 +816,11 @@ static int dns_xfer_deliver ( struct dns_request *dns,
 			       dns, dns_name ( &buf ) );
 			dns->search.offset = dns->search.len;
 			name_len = dns_copy ( &buf, &dns->name );
+			if ( name_len < 0 ) {
+				rc = name_len;
+				dns_done ( dns, rc );
+				goto done;
+			}
 			dns->offset = ( offsetof ( typeof ( dns->buf ), name ) +
 					name_len - 1 /* Strip root label */ );
 			if ( ( rc = dns_question ( dns ) ) != 0 ) {
@@ -1030,7 +1037,7 @@ static int dns_resolv ( struct interface *resolv,
 
 	/* Open UDP connection */
 	if ( ( rc = xfer_open_socket ( &dns->socket, SOCK_DGRAM,
-				       NULL, NULL ) ) != 0 ) {
+				       &dns->nameserver.sa, NULL ) ) != 0 ) {
 		DBGC ( dns, "DNS %p could not open socket: %s\n",
 		       dns, strerror ( rc ) );
 		goto err_open_socket;

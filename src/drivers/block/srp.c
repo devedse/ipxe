@@ -29,6 +29,7 @@
  */
 
 FILE_LICENCE ( BSD2 );
+FILE_SECBOOT ( FORBIDDEN );
 
 #include <stdlib.h>
 #include <string.h>
@@ -334,7 +335,7 @@ static int srp_login ( struct srp_device *srpdev, union srp_port_id *initiator,
  */
 static int srp_login_rsp ( struct srp_device *srpdev,
 			   const void *data, size_t len ) {
-	const struct srp_login_rsp *login_rsp = data;
+	const struct srp_login_rsp *login_rsp;
 
 	/* Sanity check */
 	if ( len < sizeof ( *login_rsp ) ) {
@@ -342,6 +343,7 @@ static int srp_login_rsp ( struct srp_device *srpdev,
 		       srpdev, len );
 		return -EINVAL;
 	}
+	login_rsp = data;
 	DBGC ( srpdev, "SRP %p tag %08x LOGIN_RSP:\n",
 	       srpdev, ntohl ( login_rsp->tag.dwords[1] ) );
 	DBGC_HDA ( srpdev, 0, data, len );
@@ -366,7 +368,7 @@ static int srp_login_rsp ( struct srp_device *srpdev,
  */
 static int srp_login_rej ( struct srp_device *srpdev,
 			   const void *data, size_t len ) {
-	const struct srp_login_rej *login_rej = data;
+	const struct srp_login_rej *login_rej;
 	uint32_t reason;
 
 	/* Sanity check */
@@ -375,6 +377,7 @@ static int srp_login_rej ( struct srp_device *srpdev,
 		       srpdev, len );
 		return -EINVAL;
 	}
+	login_rej = data;
 	reason = ntohl ( login_rej->reason );
 	DBGC ( srpdev, "SRP %p tag %08x LOGIN_REJ reason %08x:\n",
 	       srpdev, ntohl ( login_rej->tag.dwords[1] ), reason );
@@ -424,23 +427,23 @@ static int srp_cmd ( struct srp_device *srpdev,
 	memcpy ( &cmd->cdb, &command->cdb, sizeof ( cmd->cdb ) );
 
 	/* Construct data-out descriptor, if present */
-	if ( command->data_out ) {
+	if ( command->data_out.len ) {
 		cmd->data_buffer_formats |= SRP_CMD_DO_FMT_DIRECT;
 		data_out = iob_put ( iobuf, sizeof ( *data_out ) );
 		data_out->address =
-		    cpu_to_be64 ( virt_to_phys ( command->data_out ) );
+		    cpu_to_be64 ( virt_to_phys ( command->data_out.data ) );
 		data_out->handle = ntohl ( srpdev->memory_handle );
-		data_out->len = ntohl ( command->data_out_len );
+		data_out->len = ntohl ( command->data_out.len );
 	}
 
 	/* Construct data-in descriptor, if present */
-	if ( command->data_in ) {
+	if ( command->data_in.len ) {
 		cmd->data_buffer_formats |= SRP_CMD_DI_FMT_DIRECT;
 		data_in = iob_put ( iobuf, sizeof ( *data_in ) );
 		data_in->address =
-		     cpu_to_be64 ( virt_to_phys ( command->data_in ) );
+		     cpu_to_be64 ( virt_to_phys ( command->data_in.data ) );
 		data_in->handle = ntohl ( srpdev->memory_handle );
-		data_in->len = ntohl ( command->data_in_len );
+		data_in->len = ntohl ( command->data_in.len );
 	}
 
 	DBGC2 ( srpdev, "SRP %p tag %08x CMD " SCSI_CDB_FORMAT "\n",
@@ -466,21 +469,26 @@ static int srp_cmd ( struct srp_device *srpdev,
  */
 static int srp_rsp ( struct srp_device *srpdev,
 		     const void *data, size_t len ) {
-	const struct srp_rsp *rsp = data;
+	const struct srp_rsp *rsp;
 	struct srp_command *srpcmd;
 	struct scsi_rsp response;
+	const void *response_data;
+	const void *sense_data;
+	size_t response_data_len;
+	size_t sense_data_len;
+	size_t remaining;
 	ssize_t data_out_residual_count;
 	ssize_t data_in_residual_count;
 
-	/* Sanity check */
-	if ( ( len < sizeof ( *rsp ) ) ||
-	     ( len < ( sizeof ( *rsp ) +
-		       srp_rsp_response_data_len ( rsp ) +
-		       srp_rsp_sense_data_len ( rsp ) ) ) ) {
+	/* Parse response */
+	remaining = len;
+	if ( remaining < sizeof ( *rsp ) ) {
 		DBGC ( srpdev, "SRP %p RSP too short (%zd bytes)\n",
 		       srpdev, len );
 		return -EINVAL;
 	}
+	rsp = data;
+	remaining -= sizeof ( *rsp );
 	DBGC2 ( srpdev, "SRP %p tag %08x RSP stat %02x dores %08x dires "
 		"%08x valid %02x%s%s%s%s%s%s\n",
 		srpdev, ntohl ( rsp->tag.dwords[1] ), rsp->status,
@@ -492,6 +500,34 @@ static int srp_rsp ( struct srp_device *srpdev,
 		( ( rsp->valid & SRP_RSP_VALID_DOOVER ) ? " doover" : "" ),
 		( ( rsp->valid & SRP_RSP_VALID_SNSVALID ) ? " sns" : "" ),
 		( ( rsp->valid & SRP_RSP_VALID_RSPVALID ) ? " rsp" : "" ) );
+
+	/* Parse response data */
+	response_data_len = srp_rsp_response_data_len ( rsp );
+	if ( remaining < response_data_len ) {
+		DBGC ( srpdev, "SRP %p RSP overlength response data\n",
+		       srpdev );
+		return -EINVAL;
+	}
+	response_data = srp_rsp_response_data ( rsp );
+	if ( response_data ) {
+		DBGC2 ( srpdev, "SRP %p response data:\n", srpdev );
+		DBGC2_HDA ( srpdev, 0, response_data, response_data_len );
+	}
+	remaining -= response_data_len;
+
+	/* Parse sense data */
+	sense_data_len = srp_rsp_sense_data_len ( rsp );
+	if ( remaining < sense_data_len ) {
+		DBGC ( srpdev, "SRP %p RSP overlength sense data\n",
+		       srpdev );
+		return -EINVAL;
+	}
+	sense_data = srp_rsp_sense_data ( rsp );
+	if ( sense_data ) {
+		DBGC2 ( srpdev, "SRP %p sense data:\n", srpdev );
+		DBGC2_HDA ( srpdev, 0, sense_data, sense_data_len );
+	}
+	remaining -= sense_data_len;
 
 	/* Identify command by tag */
 	srpcmd = srp_find_tag ( srpdev, ntohl ( rsp->tag.dwords[1] ) );
@@ -518,8 +554,7 @@ static int srp_rsp ( struct srp_device *srpdev,
 	} else if ( rsp->valid & SRP_RSP_VALID_DIUNDER ) {
 		response.overrun = -(data_in_residual_count);
 	}
-	scsi_parse_sense ( srp_rsp_sense_data ( rsp ),
-			   srp_rsp_sense_data_len ( rsp ), &response.sense );
+	scsi_parse_sense ( sense_data, sense_data_len, &response.sense );
 
 	/* Report SCSI response */
 	scsi_response ( &srpcmd->scsi, &response );
@@ -623,7 +658,7 @@ static int srpdev_scsi_command ( struct srp_device *srpdev,
 static int srpdev_deliver ( struct srp_device *srpdev,
 			    struct io_buffer *iobuf,
 			    struct xfer_metadata *meta __unused ) {
-	struct srp_common *common = iobuf->data;
+	struct srp_common *common;
 	int ( * type ) ( struct srp_device *srp, const void *data, size_t len );
 	int rc;
 
@@ -634,6 +669,7 @@ static int srpdev_deliver ( struct srp_device *srpdev,
 		rc = -EINVAL;
 		goto err;
 	}
+	common = iobuf->data;
 
 	/* Determine IU type */
 	switch ( common->type ) {

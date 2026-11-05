@@ -25,6 +25,7 @@ FILE_SECBOOT ( PERMITTED );
 #define CONSOLE_FRAMEBUFFER	/* Graphical framebuffer console */
 #define CONSOLE_SYSLOG		/* Syslog console */
 #define CONSOLE_SYSLOGS		/* Encrypted syslog console */
+#define CONSOLE_DMESG		/* In-memory ring buffer console */
 //#define CONSOLE_DISKLOG	/* Disk log console */
 
 /* Console types supported only on systems with serial ports */
@@ -82,6 +83,12 @@ FILE_SECBOOT ( PERMITTED );
 
 #define KEYBOARD_MAP	us	/* Default US keyboard map */
 //#define KEYBOARD_MAP	dynamic	/* Runtime selectable keyboard map */
+
+/* Use dynamic keyboard by default on EFI platforms */
+#if defined ( PLATFORM_efi )
+  #undef KEYBOARD_MAP
+  #define KEYBOARD_MAP	dynamic
+#endif
 
 /*****************************************************************************
  *

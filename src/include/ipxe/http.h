@@ -100,11 +100,23 @@ struct http_connection {
 struct http_method {
 	/** Method name (e.g. "GET" or "POST") */
 	const char *name;
+	/** Flags */
+	unsigned int flags;
 };
 
-extern struct http_method http_head;
-extern struct http_method http_get;
-extern struct http_method http_post;
+/** HTTP method has a request body */
+#define HTTP_FL_REQ_BODY 0x0001
+
+/** HTTP method table */
+#define HTTP_METHODS __table ( struct http_method, "http_methods" )
+
+/** Declare an HTTP method */
+#define __http_method __table_entry ( HTTP_METHODS, 01 )
+
+extern struct http_method http_head __http_method;
+extern struct http_method http_get __http_method;
+extern struct http_method http_post __http_method;
+extern struct http_method http_put __http_method;
 
 /******************************************************************************
  *

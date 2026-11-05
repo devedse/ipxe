@@ -86,6 +86,9 @@ struct asn1_builder_header {
 /** ASN.1 generalized time */
 #define ASN1_GENERALIZED_TIME 0x18
 
+/** ASN.1 high tag number */
+#define ASN1_HIGH 0x1f
+
 /** ASN.1 sequence */
 #define ASN1_SEQUENCE 0x30
 
@@ -211,6 +214,18 @@ struct asn1_builder_header {
 	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
 	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
 	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 14 )
+
+/** ASN.1 OID for sha512-224WithRSAEncryption (1.2.840.113549.1.1.15) */
+#define ASN1_OID_SHA512_224WITHRSAENCRYPTION			\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 15 )
+
+/** ASN.1 OID for sha512-256WithRSAEncryption (1.2.840.113549.1.1.16) */
+#define ASN1_OID_SHA512_256WITHRSAENCRYPTION			\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 16 )
 
 /** ASN.1 OID for id-md4 (1.2.840.113549.2.4) */
 #define ASN1_OID_MD4						\
@@ -448,13 +463,17 @@ extern struct asn1_algorithm md5_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm
 sha1_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm
+sha224_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
 sha256_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm
 sha384_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm
 sha512_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm
-sha224_with_rsa_encryption_algorithm __asn1_algorithm;
+sha512_224_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha512_256_with_rsa_encryption_algorithm __asn1_algorithm;
 extern struct asn1_algorithm oid_md4_algorithm __asn1_algorithm;
 extern struct asn1_algorithm oid_md5_algorithm __asn1_algorithm;
 extern struct asn1_algorithm oid_sha1_algorithm __asn1_algorithm;
@@ -465,6 +484,8 @@ extern struct asn1_algorithm oid_sha224_algorithm __asn1_algorithm;
 extern struct asn1_algorithm oid_sha512_224_algorithm __asn1_algorithm;
 extern struct asn1_algorithm oid_sha512_256_algorithm __asn1_algorithm;
 extern struct asn1_algorithm ecpubkey_algorithm __asn1_algorithm;
+extern struct asn1_algorithm prime256v1_algorithm __asn1_algorithm;
+extern struct asn1_algorithm secp384r1_algorithm __asn1_algorithm;
 
 /**
  * Invalidate ASN.1 object cursor
@@ -549,6 +570,7 @@ extern int asn1_parse_gcm ( struct asn1_algorithm *algorithm,
 			    struct asn1_cursor *params );
 extern int asn1_generalized_time ( const struct asn1_cursor *cursor,
 				   time_t *time );
+extern size_t asn1_header_len ( size_t len );
 extern int asn1_grow ( struct asn1_builder *builder, size_t extra );
 extern int asn1_prepend_raw ( struct asn1_builder *builder, const void *data,
 			      size_t len );

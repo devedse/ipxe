@@ -2,12 +2,16 @@
 #define NET_PROTO_IPV6
 #define DOWNLOAD_PROTO_HTTPS
 
-/* Allow retrieval of metadata (such as an iPXE boot script) from
- * Google Compute Engine metadata server.
- */
-#define HTTP_HACK_GCE
+/* Allow scripts to create custom headers for retrieving metadata */
+#define PARAM_CMD
 
 /* Allow scripts to handle errors by powering down the VM to avoid
  * incurring unnecessary costs.
  */
 #define POWEROFF_CMD
+
+/* Enable commands useful for automated tests */
+#define DIGEST_CMD
+
+/* Enable MIME image support */
+#define IMAGE_MIME

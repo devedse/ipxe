@@ -99,6 +99,36 @@ REQUIRE_OBJECT ( oid_p256 );
 REQUIRE_OBJECT ( oid_p384 );
 #endif
 
+/* FFDHE2048 */
+#if defined ( CRYPTO_GROUP_FFDHE2048 )
+REQUIRE_OBJECT ( kex_ffdhe2048 );
+#endif
+
+/* FFDHE3072 */
+#if defined ( CRYPTO_GROUP_FFDHE3072 )
+REQUIRE_OBJECT ( kex_ffdhe3072 );
+#endif
+
+/* FFDHE4096 */
+#if defined ( CRYPTO_GROUP_FFDHE4096 )
+REQUIRE_OBJECT ( kex_ffdhe4096 );
+#endif
+
+/* MODP2048 */
+#if defined ( CRYPTO_GROUP_MODP2048 )
+REQUIRE_OBJECT ( kex_modp2048 );
+#endif
+
+/* MODP3072 */
+#if defined ( CRYPTO_GROUP_MODP3072 )
+REQUIRE_OBJECT ( kex_modp3072 );
+#endif
+
+/* MODP4096 */
+#if defined ( CRYPTO_GROUP_MODP4096 )
+REQUIRE_OBJECT ( kex_modp4096 );
+#endif
+
 /* AES-CBC */
 #if defined ( CRYPTO_CIPHER_AES_CBC )
 REQUIRE_OBJECT ( oid_aes_cbc );
@@ -137,6 +167,16 @@ REQUIRE_OBJECT ( rsa_sha384 );
 /* RSA and SHA-512 */
 #if defined ( CRYPTO_PUBKEY_RSA ) && defined ( CRYPTO_DIGEST_SHA512 )
 REQUIRE_OBJECT ( rsa_sha512 );
+#endif
+
+/* RSA and SHA-512/224 */
+#if defined ( CRYPTO_PUBKEY_RSA ) && defined ( CRYPTO_DIGEST_SHA512_224 )
+REQUIRE_OBJECT ( rsa_sha512_224 );
+#endif
+
+/* RSA and SHA-512/256 */
+#if defined ( CRYPTO_PUBKEY_RSA ) && defined ( CRYPTO_DIGEST_SHA512_256 )
+REQUIRE_OBJECT ( rsa_sha512_256 );
 #endif
 
 /* RSA, AES-CBC, and SHA-1 */
@@ -265,4 +305,14 @@ REQUIRE_OBJECT ( ecdhe_ecdsa_aes_gcm_sha256 );
 #if defined ( CRYPTO_EXCHANGE_ECDHE ) && defined ( CRYPTO_PUBKEY_ECDSA ) && \
     defined ( CRYPTO_CIPHER_AES_GCM ) && defined ( CRYPTO_DIGEST_SHA384 )
 REQUIRE_OBJECT ( ecdhe_ecdsa_aes_gcm_sha384 );
+#endif
+
+/* AES-GCM and SHA-256 */
+#if defined ( CRYPTO_CIPHER_AES_GCM ) && defined ( CRYPTO_DIGEST_SHA256 )
+REQUIRE_OBJECT ( aes_gcm_sha256 );
+#endif
+
+/* AES-GCM and SHA-384 */
+#if defined ( CRYPTO_CIPHER_AES_GCM ) && defined ( CRYPTO_DIGEST_SHA384 )
+REQUIRE_OBJECT ( aes_gcm_sha384 );
 #endif

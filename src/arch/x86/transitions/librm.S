@@ -16,11 +16,20 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 /* CR0: protection enabled */
 #define CR0_PE ( 1 << 0 )
 
+/* CR0: FPU emulation enabled */
+#define CR0_EM ( 1 << 2 )
+
+/* CR0: task switched */
+#define CR0_TS ( 1 << 3 )
+
 /* CR0: paging */
 #define CR0_PG ( 1 << 31 )
 
 /* CR4: physical address extensions */
 #define CR4_PAE ( 1 << 5 )
+
+/* CR4: OS support for FXSAVE/FXRSTOR across transitions */
+#define CR4_OSFXSR ( 1 << 9 )
 
 /* Extended feature enable MSR (EFER) */
 #define MSR_EFER 0xc0000080
@@ -83,7 +92,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define if64 if 0
 #endif
 
-	.section ".note.GNU-stack", "", @progbits
+	.section ".note.GNU-stack"
 
 /****************************************************************************
  * Global descriptor table
@@ -204,14 +213,12 @@ pm_esp:	.long VIRTUAL(_estack)
  */
 	/* Temporary static buffer usage by virt_call */
 	.struct	0
-VC_TMP_GDT:		.space	6
-VC_TMP_IDT:		.space	6
-VC_TMP_PAD:		.space	4 /* for alignment */
-.if64
+VC_TMP_GDTR_IDTR:	.space	12 /* must match rm_default_gdtr_idtr layout */
+VC_TMP_CR0:		.space	4
 VC_TMP_CR3:		.space	4
 VC_TMP_CR4:		.space	4
 VC_TMP_EMER:		.space	8
-.endif
+	.balign 16
 VC_TMP_FXSAVE:		.space	512
 VC_TMP_END:
 	.previous
@@ -350,13 +357,11 @@ init_librm_rmode:
 	/* Initialise IDT */
 	virtcall init_idt
 
-#ifdef TIVOLI_VMM_WORKAROUND
-	/* Check for FXSAVE/FXRSTOR */
+.if32 ; /* Check for FXSAVE/FXRSTOR (always supported by 64-bit CPUs) */
 	clc
 	virtcall check_fxsr
 	setnc	fxsr_supported
-#endif
-
+.endif
 	/* Restore registers */
 	popl	%edi
 	popl	%ebx
@@ -373,9 +378,11 @@ set_seg_base:
 	roll	$16, %eax
 	ret
 
+.if32	/* FXSAVE/FXRSTOR instructions supported flag */
 	.section ".data16.fxsr_supported", "awx", @progbits
-fxsr_supported:		/* FXSAVE/FXRSTOR instructions supported */
+fxsr_supported:
 	.byte	0
+.endif
 
 /****************************************************************************
  * real_to_prot (real-mode near call, 32-bit virtual return address)
@@ -428,6 +435,37 @@ real_to_prot:
 	/* Load protected-mode global descriptor table */
 	data32 lgdt gdtr
 
+	/* Enable SSE instruction execution, if supported.
+	 *
+	 * Note that we have to assert CR4.OSFXSR to allow these
+	 * instructions to execute, but our context switching logic
+	 * (e.g. the protected-mode and long-mode interrupt handlers)
+	 * does not actually preserve the FPU/MMX/SSE registers.
+	 *
+	 * Our C code therefore cannot in general presume that the
+	 * FPU/MMX/SSE registers will be preserved across arbitrary
+	 * context boundaries.  However, since C code executes with
+	 * interrupts disabled, an individual function may safely use
+	 * temporary FPU/MMX/SSE registers provided that it does not
+	 * enable interrupts or otherwise relinquish the context.
+	 *
+	 * For the same C code to also be usable under the UEFI IA-32
+	 * ABI, it must preserve all registers other than %eax, %ecx,
+	 * and %edx, including preserving all MMX and XMM registers.
+	 *
+	 * The practical upshot is therefore that C code may use SSE
+	 * instructions and may assume that SSE registers will not be
+	 * changed arbitrarily during execution (either because the
+	 * ABI guarantees preservation, as with UEFI or Linux, or
+	 * because the runtime environment guarantees that interrupts
+	 * are disabled), but the C code must itself restore the
+	 * values of any modified FPU/MMX/SSE registers.
+	 */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
+	movl	%cr4, %eax
+	orw	$CR4_OSFXSR, %ax
+	movl	%eax, %cr4
+1:
 	/* Zero segment registers.  This wastes around 12 cycles on
 	 * real hardware, but saves a substantial number of emulated
 	 * instructions under KVM.
@@ -439,10 +477,10 @@ real_to_prot:
 	movw	%ax, %gs
 	movw	%ax, %ss
 
-	/* Switch to protected mode (with paging disabled if applicable) */
+	/* Switch to protected mode with paging disabled */
 	cli
 	movl	%cr0, %eax
-.if64 ;	andl	$~CR0_PG, %eax ; .endif
+	andl	$~( CR0_PG | CR0_TS | CR0_EM ), %eax
 	orb	$CR0_PE, %al
 	movl	%eax, %cr0
 	data32 ljmp	$VIRTUAL_CS, $VIRTUAL(r2p_pmode)
@@ -1018,22 +1056,25 @@ virt_call:
 	cli
 	movw	%cs:rm_ds, %ds
 
-	/* Preserve FPU, MMX and SSE state in temporary static buffer */
-	testb	$0xff, fxsr_supported
-	jz	1f
+	/* Preserve FPU/MMX/SSE state and CR4 in temporary static buffer */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
 	fxsave	( rm_tmpbuf + VC_TMP_FXSAVE )
+	movl	%cr4, %eax
+	movl	%eax, ( rm_tmpbuf + VC_TMP_CR4 )
 1:
-	/* Preserve GDT and IDT in temporary static buffer */
-	sidt	( rm_tmpbuf + VC_TMP_IDT )
-	sgdt	( rm_tmpbuf + VC_TMP_GDT )
+	/* Preserve CR0 in temporary static buffer */
+	movl	%cr0, %eax
+	movl	%eax, ( rm_tmpbuf + VC_TMP_CR0 )
 
-.if64 ;	/* Preserve control registers, if applicable */
+	/* Preserve GDTR and IDTR in temporary static buffer */
+	sidt	( rm_tmpbuf + VC_TMP_GDTR_IDTR + 6 )
+	sgdt	( rm_tmpbuf + VC_TMP_GDTR_IDTR + 0 )
+
+.if64 ;	/* Preserve control registers used for long mode, if applicable */
 	movl	$MSR_EFER, %ecx
 	rdmsr
 	movl	%eax, ( rm_tmpbuf + VC_TMP_EMER + 0 )
 	movl	%edx, ( rm_tmpbuf + VC_TMP_EMER + 4 )
-	movl	%cr4, %eax
-	movl	%eax, ( rm_tmpbuf + VC_TMP_CR4 )
 	movl	%cr3, %eax
 	movl	%eax, ( rm_tmpbuf + VC_TMP_CR3 )
 .endif
@@ -1071,27 +1112,29 @@ vc_lmode:
 	/* Switch to real mode and move register dump back to RM stack */
 	movl	$VC_OFFSET_END, %ecx
 	movl	$VC_TMP_END, %edx
-	leal	VC_TMP_GDT(%esp, %ecx), %esi
+	leal	VC_TMP_GDTR_IDTR(%esp, %ecx), %esi
 	pushl	$vc_rmode
 	jmp	prot_to_real
 	.section ".text16.virt_call", "ax", @progbits
 	.code16
 vc_rmode:
-.if64 ;	/* Restore control registers, if applicable */
+.if64 ;	/* Restore control registers used for long mode, if applicable */
 	movw	%sp, %bp
 	movl	( rm_tmpbuf + VC_TMP_CR3 ), %eax
 	movl	%eax, %cr3
-	movl	( rm_tmpbuf + VC_TMP_CR4 ), %eax
-	movl	%eax, %cr4
 	movl	( rm_tmpbuf + VC_TMP_EMER + 0 ), %eax
 	movl	( rm_tmpbuf + VC_TMP_EMER + 4 ), %edx
 	movl	$MSR_EFER, %ecx
 	wrmsr
 .endif
+	/* Restore CR0 from temporary static buffer */
+	movl	( rm_tmpbuf + VC_TMP_CR0 ), %eax
+	movl	%eax, %cr0
 
-	/* Restore FPU, MMX and SSE state from temporary static buffer */
-	testb	$0xff, fxsr_supported
-	jz	1f
+	/* Restore FPU/MMX/SSE state and CR4 from temporary static buffer */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
+	movl	( rm_tmpbuf + VC_TMP_CR4 ), %eax
+	movl	%eax, %cr4
 	fxrstor	( rm_tmpbuf + VC_TMP_FXSAVE )
 1:
 	/* Restore registers and flags and return */

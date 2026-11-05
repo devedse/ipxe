@@ -22,8 +22,7 @@ jobs:
     container:
       image: ghcr.io/ipxe/ipxe-builder-${{ matrix.arch }}
     env:
-      bindir: >-
-        ${{ matrix.arch == 'i386' && 'bin' || 'bin-x86_64-pcbios' }}
+      bindir: bin-${{ matrix.arch }}-pcbios
     steps:
 
       - name: Check out code
@@ -304,6 +303,8 @@ jobs:
             exec: qemu-riscv32-static
           - arch: riscv64
             exec: qemu-riscv64-static
+          - arch: s390x
+            exec: qemu-s390x-static
           - arch: x86_64
             exec: valgrind
     container:
@@ -320,6 +321,7 @@ jobs:
         run: |
           make ${{ env.bindir }}/ipxe.linux \
                ${{ env.bindir }}/tests.linux \
+               ${{ env.bindir }}/slowtests.linux \
                ${{ env.bindir }}/errors
 
       - name: Upload
@@ -330,12 +332,20 @@ jobs:
           path: |
             src/${{ env.bindir }}/ipxe.linux
             src/${{ env.bindir }}/tests.linux
+            src/${{ env.bindir }}/slowtests.linux
             src/${{ env.bindir }}/errors
 
       - name: Test
         working-directory: src
         run: |
           ${{ matrix.exec }} ${{ env.bindir }}/tests.linux
+
+      - name: Slow test
+        working-directory: src
+        if: >-
+          github.ref == 'refs/heads/slowtest'
+        run: |
+          ${{ matrix.exec }} ${{ env.bindir }}/slowtests.linux
 
   shim:
     name: UEFI shim
@@ -394,9 +404,6 @@ jobs:
       sbbinaries: >-
         bin-${ARCH}-efi-sb/ipxe.efi
       srvbinaries: >-
-        bin/ipxe.pxe
-        bin/ipxe-legacy.pxe
-        bin/undionly.kpxe
         bin-arm32-efi/ipxe.efi
         bin-arm32-efi/ipxe-legacy.efi
         bin-arm32-efi/snponly.efi
@@ -408,6 +415,9 @@ jobs:
         bin-i386-efi/ipxe.efi
         bin-i386-efi/ipxe-legacy.efi
         bin-i386-efi/snponly.efi
+        bin-i386-pcbios/ipxe.pxe
+        bin-i386-pcbios/ipxe-legacy.pxe
+        bin-i386-pcbios/undionly.kpxe
         bin-loong64-efi/ipxe.efi
         bin-loong64-efi/ipxe-legacy.efi
         bin-loong64-efi/snponly.efi
@@ -437,7 +447,7 @@ jobs:
       - name: Download
         uses: actions/download-artifact@v7
         with:
-          pattern: "{bin,bin-x86_64-pcbios,bin-*-efi,bin-*-efi-sb,shim}"
+          pattern: "{bin-*-pcbios,bin-*-efi,bin-*-efi-sb,shim}"
 
       - name: Autoexec
         run: |

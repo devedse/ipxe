@@ -315,16 +315,12 @@ static void intelx_poll ( struct net_device *netdev ) {
 
 	/* Check for and acknowledge interrupts */
 	eicr = readl ( intel->regs + INTELX_EICR );
-	if ( ! eicr )
-		return;
 
-	/* Poll for TX completions, if applicable */
-	if ( eicr & INTELX_EIRQ_TX0 )
-		intel_poll_tx ( netdev );
+	/* Poll for TX completions */
+	intel_poll_tx ( netdev );
 
-	/* Poll for RX completions, if applicable */
-	if ( eicr & ( INTELX_EIRQ_RX0 | INTELX_EIRQ_RXO ) )
-		intel_poll_rx ( netdev );
+	/* Poll for RX completions */
+	intel_poll_rx ( netdev );
 
 	/* Report receive overruns */
 	if ( eicr & INTELX_EIRQ_RXO )
@@ -397,9 +393,9 @@ static int intelx_probe ( struct pci_device *pci ) {
 	memset ( intel, 0, sizeof ( *intel ) );
 	intel->port = PCI_FUNC ( pci->busdevfn );
 	intel_init_ring ( &intel->tx, INTEL_NUM_TX_DESC, INTELX_TD,
-			  intel_describe_tx );
+			  intel_describe_tx, intel_status_tx );
 	intel_init_ring ( &intel->rx, INTEL_NUM_RX_DESC, INTELX_RD,
-			  intel_describe_rx );
+			  intel_describe_rx, intel_status_rx );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );

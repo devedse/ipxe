@@ -62,7 +62,8 @@ void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
 	/* Initialise cipher */
 	okx ( cipher_setkey ( cipher, ctx, test->key, test->key_len ) == 0,
 	      file, line );
-	cipher_setiv ( cipher, ctx, test->iv, test->iv_len );
+	okx ( cipher_setiv ( cipher, ctx, test->iv, test->iv_len ) == 0,
+	      file, line );
 
 	/* Process additional data, if applicable */
 	if ( test->additional_len ) {
@@ -83,7 +84,8 @@ void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
 	okx ( memcmp ( auth, test->auth, test->auth_len ) == 0, file, line );
 
 	/* Reset initialisation vector */
-	cipher_setiv ( cipher, ctx, test->iv, test->iv_len );
+	okx ( cipher_setiv ( cipher, ctx, test->iv, test->iv_len ) == 0,
+	      file, line );
 
 	/* Process additional data, if applicable */
 	if ( test->additional_len ) {
@@ -121,7 +123,8 @@ void cipher_decrypt_okx ( struct cipher_test *test, const char *file,
 	/* Initialise cipher */
 	okx ( cipher_setkey ( cipher, ctx, test->key, test->key_len ) == 0,
 	      file, line );
-	cipher_setiv ( cipher, ctx, test->iv, test->iv_len );
+	okx ( cipher_setiv ( cipher, ctx, test->iv, test->iv_len ) == 0,
+	      file, line );
 
 	/* Process additional data, if applicable */
 	if ( test->additional_len ) {
@@ -142,7 +145,8 @@ void cipher_decrypt_okx ( struct cipher_test *test, const char *file,
 	okx ( memcmp ( auth, test->auth, test->auth_len ) == 0, file, line );
 
 	/* Reset initialisation vector */
-	cipher_setiv ( cipher, ctx, test->iv, test->iv_len );
+	okx ( cipher_setiv ( cipher, ctx, test->iv, test->iv_len ) == 0,
+	      file, line );
 
 	/* Process additional data, if applicable */
 	if ( test->additional_len ) {
@@ -178,12 +182,49 @@ void cipher_okx ( struct cipher_test *test, const char *file,
 	okx ( cipher->blocksize != 0, file, line );
 	okx ( ( len % cipher->blocksize ) == 0, file, line );
 	okx ( ( cipher->alignsize % cipher->blocksize ) == 0, file, line );
+	okx ( cipher->confidential, file, line );
 
 	/* Report encryption test result */
 	cipher_encrypt_okx ( test, file, line );
 
 	/* Report decryption test result */
 	cipher_decrypt_okx ( test, file, line );
+}
+
+/**
+ * Report a cipher key failure test result
+ *
+ * @v test		Cipher test
+ * @v file		Test code file
+ * @v line		Test code line
+ */
+void cipher_key_fail_okx ( struct cipher_test *test, const char *file,
+			   unsigned int line ) {
+	struct cipher_algorithm *cipher = test->cipher;
+	uint8_t ctx[cipher->ctxsize];
+
+	/* Initialise cipher */
+	okx ( cipher_setkey ( cipher, ctx, test->key, test->key_len ) != 0,
+	      file, line );
+}
+
+/**
+ * Report a cipher IV failure test result
+ *
+ * @v test		Cipher test
+ * @v file		Test code file
+ * @v line		Test code line
+ */
+void cipher_iv_fail_okx ( struct cipher_test *test, const char *file,
+			  unsigned int line ) {
+	struct cipher_algorithm *cipher = test->cipher;
+	uint8_t ctx[cipher->ctxsize];
+
+	/* Initialise cipher */
+	okx ( cipher_setkey ( cipher, ctx, test->key, test->key_len ) == 0,
+	      file, line );
+	okx ( cipher_setiv ( cipher, ctx, test->iv, test->iv_len ) != 0,
+	      file, line );
 }
 
 /**
@@ -219,7 +260,8 @@ cipher_cost ( struct cipher_algorithm *cipher, size_t key_len,
 	/* Initialise cipher */
 	rc = cipher_setkey ( cipher, ctx, key, key_len );
 	assert ( rc == 0 );
-	cipher_setiv ( cipher, ctx, iv, sizeof ( iv ) );
+	rc = cipher_setiv ( cipher, ctx, iv, sizeof ( iv ) );
+	assert ( rc == 0 );
 
 	/* Profile cipher operation */
 	memset ( &profiler, 0, sizeof ( profiler ) );

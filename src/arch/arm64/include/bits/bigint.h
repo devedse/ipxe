@@ -11,32 +11,9 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
-#include <strings.h>
 
 /** Element of a big integer */
 typedef uint64_t bigint_element_t;
-
-/**
- * Initialise big integer
- *
- * @v value0		Element 0 of big integer to initialise
- * @v size		Number of elements
- * @v data		Raw data
- * @v len		Length of raw data
- */
-static inline __attribute__ (( always_inline )) void
-bigint_init_raw ( uint64_t *value0, unsigned int size,
-		  const void *data, size_t len ) {
-	size_t pad_len = ( sizeof ( bigint_t ( size ) ) - len );
-	uint8_t *value_byte = ( ( void * ) value0 );
-	const uint8_t *data_byte = ( data + len );
-
-	/* Copy raw data in reverse order, padding with zeros */
-	while ( len-- )
-		*(value_byte++) = *(--data_byte);
-	while ( pad_len-- )
-		*(value_byte++) = 0;
-}
 
 /**
  * Add big integers
@@ -184,76 +161,6 @@ bigint_shr_raw ( uint64_t *value0, unsigned int size ) {
 }
 
 /**
- * Test if big integer is equal to zero
- *
- * @v value0		Element 0 of big integer
- * @v size		Number of elements
- * @ret is_zero		Big integer is equal to zero
- */
-static inline __attribute__ (( always_inline, pure )) int
-bigint_is_zero_raw ( const uint64_t *value0, unsigned int size ) {
-	const uint64_t *value = value0;
-	uint64_t value_i;
-
-	do {
-		value_i = *(value++);
-		if ( value_i )
-			break;
-	} while ( --size );
-
-	return ( value_i == 0 );
-}
-
-/**
- * Compare big integers
- *
- * @v value0		Element 0 of big integer
- * @v reference0	Element 0 of reference big integer
- * @v size		Number of elements
- * @ret geq		Big integer is greater than or equal to the reference
- */
-static inline __attribute__ (( always_inline, pure )) int
-bigint_is_geq_raw ( const uint64_t *value0, const uint64_t *reference0,
-		    unsigned int size ) {
-	const uint64_t *value = ( value0 + size );
-	const uint64_t *reference = ( reference0 + size );
-	uint64_t value_i;
-	uint64_t reference_i;
-
-	do {
-		value_i = *(--value);
-		reference_i = *(--reference);
-		if ( value_i != reference_i )
-			break;
-	} while ( --size );
-
-	return ( value_i >= reference_i );
-}
-
-/**
- * Find highest bit set in big integer
- *
- * @v value0		Element 0 of big integer
- * @v size		Number of elements
- * @ret max_bit		Highest bit set + 1 (or 0 if no bits set)
- */
-static inline __attribute__ (( always_inline )) int
-bigint_max_set_bit_raw ( const uint64_t *value0, unsigned int size ) {
-	const uint64_t *value = ( value0 + size );
-	int max_bit = ( 8 * sizeof ( bigint_t ( size ) ) );
-	uint64_t value_i;
-
-	do {
-		value_i = *(--value);
-		max_bit -= ( 64 - fls ( value_i ) );
-		if ( value_i )
-			break;
-	} while ( --size );
-
-	return max_bit;
-}
-
-/**
  * Grow big integer
  *
  * @v source0		Element 0 of source big integer
@@ -264,10 +171,34 @@ bigint_max_set_bit_raw ( const uint64_t *value0, unsigned int size ) {
 static inline __attribute__ (( always_inline )) void
 bigint_grow_raw ( const uint64_t *source0, unsigned int source_size,
 		  uint64_t *dest0, unsigned int dest_size ) {
+	bigint_t ( dest_size ) __attribute__ (( may_alias )) *dest =
+		( ( void * ) dest0 );
 	unsigned int pad_size = ( dest_size - source_size );
+	uint64_t *discard_source;
+	uint64_t *discard_dest;
+	uint64_t discard_source_i;
+	unsigned int discard_source_size;
+	unsigned int discard_pad_size;
 
-	memcpy ( dest0, source0, sizeof ( bigint_t ( source_size ) ) );
-	memset ( ( dest0 + source_size ), 0, sizeof ( bigint_t ( pad_size ) ) );
+	__asm__ __volatile__ ( "\n1:\n\t"
+			       "ldr %2, [%0], #8\n\t"
+			       "str %2, [%1], #8\n\t"
+			       "sub %w3, %w3, #1\n\t"
+			       "cbnz %w3, 1b\n\t"
+			       "b 3f\n\t"
+			       "\n2:\n\t"
+			       "str xzr, [%1], #8\n\t"
+			       "sub %w4, %w4, #1\n\t"
+			       "\n3:\n\t"
+			       "cbnz %w4, 2b\n\t"
+			       : "=&r" ( discard_source ),
+				 "=&r" ( discard_dest ),
+				 "=&r" ( discard_source_i ),
+				 "=&r" ( discard_source_size ),
+				 "=&r" ( discard_pad_size ),
+				 "=m" ( *dest )
+			       : "0" ( source0 ), "1" ( dest0 ),
+				 "3" ( source_size ), "4" ( pad_size ) );
 }
 
 /**
@@ -281,27 +212,25 @@ bigint_grow_raw ( const uint64_t *source0, unsigned int source_size,
 static inline __attribute__ (( always_inline )) void
 bigint_shrink_raw ( const uint64_t *source0, unsigned int source_size __unused,
 		    uint64_t *dest0, unsigned int dest_size ) {
+	bigint_t ( dest_size ) __attribute__ (( may_alias )) *dest =
+		( ( void * ) dest0 );
+	uint64_t *discard_source;
+	uint64_t *discard_dest;
+	uint64_t discard_source_i;
+	unsigned int discard_dest_size;
 
-	memcpy ( dest0, source0, sizeof ( bigint_t ( dest_size ) ) );
-}
-
-/**
- * Finalise big integer
- *
- * @v value0		Element 0 of big integer to finalise
- * @v size		Number of elements
- * @v out		Output buffer
- * @v len		Length of output buffer
- */
-static inline __attribute__ (( always_inline )) void
-bigint_done_raw ( const uint64_t *value0, unsigned int size __unused,
-		  void *out, size_t len ) {
-	const uint8_t *value_byte = ( ( const void * ) value0 );
-	uint8_t *out_byte = ( out + len );
-
-	/* Copy raw data in reverse order */
-	while ( len-- )
-		*(--out_byte) = *(value_byte++);
+	__asm__ __volatile__ ( "\n1:\n\t"
+			       "ldr %2, [%0], #8\n\t"
+			       "str %2, [%1], #8\n\t"
+			       "sub %w3, %w3, #1\n\t"
+			       "cbnz %w3, 1b\n\t"
+			       : "=&r" ( discard_source ),
+				 "=&r" ( discard_dest ),
+				 "=&r" ( discard_source_i ),
+				 "=&r" ( discard_dest_size ),
+				 "=m" ( *dest )
+			       : "0" ( source0 ), "1" ( dest0 ),
+				 "3" ( dest_size ) );
 }
 
 /**

@@ -998,19 +998,29 @@ static int numeric_setting_value ( int is_signed, const void *raw, size_t len,
 int fetch_numeric_setting ( struct settings *settings,
 			    const struct setting *setting,
 			    unsigned long *value, int is_signed ) {
-	unsigned long tmp;
+	void *raw;
+	int raw_len;
 	int len;
 
 	/* Avoid returning uninitialised data on error */
 	*value = 0;
 
 	/* Fetch raw (network-ordered, variable-length) setting */
-	len = fetch_raw_setting ( settings, setting, &tmp, sizeof ( tmp ) );
-	if ( len < 0 )
-		return len;
+	raw_len = fetch_raw_setting_copy ( settings, setting, &raw );
+	if ( raw_len < 0 ) {
+		len = raw_len;
+		goto err_fetch_copy;
+	}
 
 	/* Extract numeric value */
-	return numeric_setting_value ( is_signed, &tmp, len, value );
+	len = numeric_setting_value ( is_signed, raw, raw_len, value );
+	if ( len < 0 )
+		goto err_value;
+
+ err_value:
+	free ( raw );
+ err_fetch_copy:
+	return len;
 }
 
 /**
@@ -2630,11 +2640,40 @@ static int unixtime_fetch ( void *data, size_t len ) {
 	uint32_t content;
 
 	/* Return current time */
-	content = htonl ( time(NULL) );
+	content = htonl ( time ( NULL ) );
 	if ( len > sizeof ( content ) )
 		len = sizeof ( content );
 	memcpy ( data, &content, len );
 	return sizeof ( content );
+}
+
+/**
+ * Store current time setting
+ *
+ * @v data		Setting data, or NULL to clear setting
+ * @v len		Length of setting data
+ * @ret rc		Return status code
+ */
+static int unixtime_store ( const void *data, size_t len ) {
+	unsigned long value;
+	int check_len;
+	int rc;
+
+	/* Get intended current time */
+	check_len = numeric_setting_value ( 0, data, len, &value );
+	if ( check_len < 0 ) {
+		rc = check_len;
+		return rc;
+	}
+
+	/* Adjust or restore system clock, as applicable */
+	if ( len ) {
+		time_adjust ( value - time ( NULL ) );
+	} else {
+		time_restore();
+	}
+
+	return 0;
 }
 
 /** Current time setting */
@@ -2648,6 +2687,7 @@ const struct setting unixtime_setting __setting ( SETTING_MISC, unixtime ) = {
 /** Current time built-in setting */
 struct builtin_setting unixtime_builtin_setting __builtin_setting = {
 	.setting = &unixtime_setting,
+	.store = unixtime_store,
 	.fetch = unixtime_fetch,
 };
 
@@ -2759,6 +2799,30 @@ struct builtin_setting cwduri_builtin_setting __builtin_setting = {
 };
 
 /**
+ * Store built-in setting
+ *
+ * @v settings		Settings block
+ * @v setting		Setting to store
+ * @v data		Setting data, or NULL to clear setting
+ * @v len		Length of setting data
+ * @ret rc		Return status code
+ */
+static int builtin_store ( struct settings *settings __unused,
+			   const struct setting *setting,
+			   const void *data, size_t len ) {
+	struct builtin_setting *builtin;
+
+	for_each_table_entry ( builtin, BUILTIN_SETTINGS ) {
+		if ( setting_cmp ( setting, builtin->setting ) == 0 ) {
+			if ( ! builtin->store )
+				return -ENOTSUP;
+			return builtin->store ( data, len );
+		}
+	}
+	return -ENOENT;
+}
+
+/**
  * Fetch built-in setting
  *
  * @v settings		Settings block
@@ -2795,6 +2859,7 @@ static int builtin_applies ( struct settings *settings __unused,
 /** Built-in settings operations */
 static struct settings_operations builtin_settings_operations = {
 	.applies = builtin_applies,
+	.store = builtin_store,
 	.fetch = builtin_fetch,
 };
 

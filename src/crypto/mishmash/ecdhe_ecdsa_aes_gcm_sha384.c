@@ -38,9 +38,11 @@ tls_ecdhe_ecdsa_with_aes_256_gcm_sha384 __tls_cipher_suite ( 02 ) = {
 	.fixed_iv_len = 4,
 	.record_iv_len = 8,
 	.mac_len = 0,
+	.verify_len = 12,
+	.flags = TLS_CIPHER_FL_SEQUENTIAL_IV,
 	.exchange = &tls_ecdhe_exchange_algorithm,
 	.pubkey = &ecdsa_algorithm,
 	.cipher = &aes_gcm_algorithm,
-	.digest = &sha384_algorithm,
+	.digest = &digest_null,
 	.handshake = &sha384_algorithm,
 };

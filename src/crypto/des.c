@@ -216,12 +216,18 @@ struct des_generator {
 		       INV3, BIT3, INV2, BIT2, INV1, BIT1, INV0, BIT0 )	\
 	{								\
 		.permutation = (PERMUTATION),				\
-		.seed = ( ( (INV0) << 31 ) | ( (BIT0) << 28 ) |		\
-			  ( (INV1) << 27 ) | ( (BIT1) << 24 ) |		\
-			  ( (INV2) << 23 ) | ( (BIT2) << 20 ) |		\
-			  ( (INV3) << 19 ) | ( (BIT3) << 16 ) |		\
-			  ( (INV4) << 15 ) | ( (BIT4) << 12 ) |		\
-			  ( (INV5) << 11 ) | ( (BIT5) <<  8 ) |		\
+		.seed = ( ( ( ( unsigned int ) (INV0) ) << 31 ) |	\
+			  ( ( ( unsigned int ) (BIT0) ) << 28 ) |	\
+			  ( ( ( unsigned int ) (INV1) ) << 27 ) |	\
+			  ( ( ( unsigned int ) (BIT1) ) << 24 ) |	\
+			  ( ( ( unsigned int ) (INV2) ) << 23 ) |	\
+			  ( ( ( unsigned int ) (BIT2) ) << 20 ) |	\
+			  ( ( ( unsigned int ) (INV3) ) << 19 ) |	\
+			  ( ( ( unsigned int ) (BIT3) ) << 16 ) |	\
+			  ( ( ( unsigned int ) (INV4) ) << 15 ) |	\
+			  ( ( ( unsigned int ) (BIT4) ) << 12 ) |	\
+			  ( ( ( unsigned int ) (INV5) ) << 11 ) |	\
+			  ( ( ( unsigned int ) (BIT5) ) <<  8 ) |	\
 			  ( ( uint32_t ) sizeof (PERMUTATION) - 1 ) |	\
 			  (OFFSET) ),					\
 	}
@@ -580,12 +586,14 @@ static uint32_t des_rol28 ( uint32_t dword ) {
 /**
  * Set key
  *
+ * @v cipher		Cipher algorithm
  * @v ctx		Context
  * @v key		Key
  * @v keylen		Key length
  * @ret rc		Return status code
  */
-static int des_setkey ( void *ctx, const void *key, size_t keylen ) {
+static int des_setkey ( struct cipher_algorithm *cipher __unused, void *ctx,
+			const void *key, size_t keylen ) {
 	struct des_context *des = ctx;
 	union des_round_key *rkey = des->rkey;
 	union des_block reg;
@@ -640,12 +648,14 @@ static int des_setkey ( void *ctx, const void *key, size_t keylen ) {
 /**
  * Encrypt data
  *
+ * @v cipher		Cipher algorithm
  * @v ctx		Context
  * @v src		Data to encrypt
  * @v dst		Buffer for encrypted data
  * @v len		Length of data
  */
-static void des_encrypt ( void *ctx, const void *src, void *dst, size_t len ) {
+static void des_encrypt ( struct cipher_algorithm *cipher __unused, void *ctx,
+			  const void *src, void *dst, size_t len ) {
 	struct des_context *des = ctx;
 
 	/* Sanity check */
@@ -658,12 +668,14 @@ static void des_encrypt ( void *ctx, const void *src, void *dst, size_t len ) {
 /**
  * Decrypt data
  *
+ * @v cipher		Cipher algorithm
  * @v ctx		Context
  * @v src		Data to decrypt
  * @v dst		Buffer for decrypted data
  * @v len		Length of data
  */
-static void des_decrypt ( void *ctx, const void *src, void *dst, size_t len ) {
+static void des_decrypt ( struct cipher_algorithm *cipher __unused, void *ctx,
+			  const void *src, void *dst, size_t len ) {
 	struct des_context *des = ctx;
 
 	/* Sanity check */
@@ -681,6 +693,7 @@ struct cipher_algorithm des_algorithm = {
 	.blocksize = DES_BLOCKSIZE,
 	.alignsize = 0,
 	.authsize = 0,
+	.confidential = 1,
 	.setkey = des_setkey,
 	.setiv = cipher_null_setiv,
 	.encrypt = des_encrypt,

@@ -167,8 +167,9 @@ static int ipv4_add_static ( struct net_device *netdev, struct in_addr address,
 		remaining--;
 		masklen = ( ( width + 7 ) / 8 );
 
-		/* Check remaining length */
-		if ( ( masklen + sizeof ( gateway ) ) > remaining ) {
+		/* Check remaining length and mask validity */
+		if ( ( ( masklen + sizeof ( gateway ) ) > remaining ) ||
+		     ( width > 32 ) ) {
 			DBGC ( netdev, "IPv4 invalid static route:\n" );
 			DBGC_HDA ( netdev, 0, routes, len );
 			return -EINVAL;
@@ -634,7 +635,7 @@ static int ipv4_rx ( struct io_buffer *iobuf,
 		     const void *ll_dest __unused,
 		     const void *ll_source __unused,
 		     unsigned int flags ) {
-	struct iphdr *iphdr = iobuf->data;
+	struct iphdr *iphdr;
 	size_t hdrlen;
 	size_t len;
 	union {
@@ -659,10 +660,11 @@ static int ipv4_rx ( struct io_buffer *iobuf,
 
 	/* Sanity check the IPv4 header */
 	if ( iob_len ( iobuf ) < sizeof ( *iphdr ) ) {
-		DBGC ( iphdr->src, "IPv4 packet too short at %zd bytes (min "
+		DBGC ( netdev, "IPv4 packet too short at %zd bytes (min "
 		       "%zd bytes)\n", iob_len ( iobuf ), sizeof ( *iphdr ) );
 		goto err_header;
 	}
+	iphdr = iobuf->data;
 	if ( ( iphdr->verhdrlen & IP_MASK_VER ) != IP_VER ) {
 		DBGC ( iphdr->src, "IPv4 version %#02x not supported\n",
 		       iphdr->verhdrlen );

@@ -46,6 +46,7 @@ FILE_SECBOOT ( PERMITTED );
 //#define DOWNLOAD_PROTO_FTP	/* File Transfer Protocol */
 //#define DOWNLOAD_PROTO_SLAM	/* Scalable Local Area Multicast */
 //#define DOWNLOAD_PROTO_NFS	/* Network File System Protocol */
+#define DOWNLOAD_PROTO_DATA	/* Inline Data */
 
 /* Protocols supported only on platforms with filesystem abstractions */
 #if defined ( PLATFORM_efi )
@@ -57,7 +58,6 @@ FILE_SECBOOT ( PERMITTED );
 #define HTTP_AUTH_DIGEST	/* Digest authentication */
 #define HTTP_AUTH_NTLM		/* NTLM authentication */
 //#define HTTP_ENC_PEERDIST	/* PeerDist content encoding */
-//#define HTTP_HACK_GCE		/* Google Compute Engine hacks */
 
 /* Disable protocols not historically included in BIOS builds */
 #if defined ( PLATFORM_pcbios )
@@ -101,6 +101,7 @@ FILE_SECBOOT ( PERMITTED );
 #define IMAGE_ARCHIVE_CMD	/* Archive image management commands */
 //#define IMAGE_CRYPT_CMD	/* Image encryption management commands */
 //#define IMAGE_MEM_CMD		/* Read memory command */
+#define IMAGE_SET_CMD		/* Image setting commands */
 //#define IMAGE_TRUST_CMD	/* Image trust management commands */
 //#define IPSTAT_CMD		/* IP statistics commands */
 #define IWMGMT_CMD		/* Wireless interface management commands */
@@ -113,6 +114,7 @@ FILE_SECBOOT ( PERMITTED );
 #define NVO_CMD			/* Non-volatile option storage commands */
 #define PARAM_CMD		/* Request parameter commands */
 #define PCI_CMD			/* PCI commands */
+#define PEERMGMT_CMD		/* PeerDist management commands */
 //#define PING_CMD		/* Ping command */
 //#define PNPLIST_CMD		/* PNP device path listing command */
 //#define PROFSTAT_CMD		/* Profiling commands */
@@ -168,6 +170,7 @@ FILE_SECBOOT ( PERMITTED );
 #define IMAGE_PNG		/* PNG graphical image support */
 #define IMAGE_SCRIPT		/* iPXE script image support */
 //#define IMAGE_ZLIB		/* ZLIB compressed image support */
+//#define IMAGE_MIME		/* MIME image support */
 
 /* Image types supported only on BIOS platforms */
 #if defined ( PLATFORM_pcbios )
@@ -302,9 +305,6 @@ FILE_SECBOOT ( PERMITTED );
 //#define GDBSERIAL		/* Remote GDB debugging over serial */
 //#define GDBUDP		/* Remote GDB debugging over UDP */
 //#define EFI_DOWNGRADE_UX	/* Downgrade UEFI user experience */
-#define TIVOLI_VMM_WORKAROUND	/* Work around the Tivoli VMM's garbling of SSE
-				 * registers when iPXE traps to it due to
-				 * privileged instructions */
 //#define ERRMSG_80211		/* All 802.11 error descriptions (~3.3kb) */
 
 #include <config/named.h>

@@ -11,12 +11,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
+#include <ipxe/in.h>
 #include <ipxe/refcnt.h>
 #include <ipxe/list.h>
 #include <ipxe/tables.h>
 #include <ipxe/retry.h>
 #include <ipxe/socket.h>
 #include <ipxe/interface.h>
+#include <ipxe/uuid.h>
 #include <ipxe/pccrc.h>
 
 /** A PeerDist discovery socket */
@@ -31,13 +33,23 @@ struct peerdisc_socket {
 		struct sockaddr_in sin;
 		struct sockaddr_in6 sin6;
 	} address;
+	/** Most recently discovered peer via this socket (if any) */
+	char *recent;
+	/** Discovery statistics */
+	struct error_statistics stats;
 };
 
 /** PeerDist discovery socket table */
 #define PEERDISC_SOCKETS __table ( struct peerdisc_socket, "peerdisc_sockets" )
 
 /** Declare a PeerDist discovery socket */
-#define __peerdisc_socket __table_entry ( PEERDISC_SOCKETS, 01 )
+#define __peerdisc_socket( pref ) __table_entry ( PEERDISC_SOCKETS, pref )
+
+/** A PeerDist base message UUID */
+union peerdisc_message_id {
+	union uuid uuid;
+	uint32_t dword[ sizeof ( union uuid ) / sizeof ( uint32_t ) ];
+};
 
 /** A PeerDist discovery segment */
 struct peerdisc_segment {
@@ -51,8 +63,12 @@ struct peerdisc_segment {
 	 * Base16-encoded string.
 	 */
 	const char *id;
-	/** Message UUID string */
-	const char *uuid;
+	/** Base message UUID */
+	union peerdisc_message_id msgid;
+	/** Time at which discovery was started */
+	unsigned long started;
+	/** Number of discovery replies received */
+	unsigned int replies;
 	/** List of discovered peers
 	 *
 	 * The list of peers may be appended to during the lifetime of
@@ -72,6 +88,12 @@ struct peerdisc_segment {
 struct peerdisc_peer {
 	/** List of peers */
 	struct list_head list;
+	/** Discovery socket (if any) */
+	struct peerdisc_socket *socket;
+	/** Retrieval protocol */
+	struct peerdist_retrieval *retrieval;
+	/** Statistics */
+	struct error_statistics *stats;
 	/** Peer location */
 	char location[0];
 };
@@ -109,12 +131,6 @@ peerdisc_init ( struct peerdisc_client *peerdisc,
 }
 
 extern unsigned int peerdisc_timeout_secs;
-
-extern void peerdisc_stat ( struct interface *intf, struct peerdisc_peer *peer,
-			    struct list_head *peers );
-#define peerdisc_stat_TYPE( object_type )				\
-	typeof ( void ( object_type, struct peerdisc_peer *peer,	\
-			struct list_head *peers ) )
 
 extern int peerdisc_open ( struct peerdisc_client *peerdisc, const void *id,
 			   size_t len );

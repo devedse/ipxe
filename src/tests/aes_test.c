@@ -181,8 +181,51 @@ static void aes_test_exec ( void ) {
 	}
 }
 
+/**
+ * Perform AES self-test with hardware acceleration disabled
+ *
+ */
+static void aes_sw_test_exec ( void ) {
+
+	/* Disable hardware acceleration */
+	aes_decelerate();
+
+	/* Run tests */
+	DBG ( "AES hardware acceleration disabled\n" );
+	aes_test_exec();
+
+	/* Restore hardware acceleration (if supported) */
+	aes_accelerate();
+}
+
+/**
+ * Perform AES self-test with hardware acceleration enabled
+ *
+ */
+static void aes_hw_test_exec ( void ) {
+
+	/* Attempt to enable hardware acceleration */
+	aes_accelerate();
+
+	/* Do not repeat tests if no hardware acceleration exists */
+	if ( ! aes_is_accelerated() ) {
+		DBG ( "AES has no hardware acceleration support\n" );
+		return;
+	}
+
+	/* Run tests */
+	DBG ( "AES hardware acceleration enabled\n" );
+	aes_test_exec();
+}
+
 /** AES self-test */
-struct self_test aes_test __self_test = {
-	.name = "aes",
-	.exec = aes_test_exec,
+struct self_test aes_test[] __self_test = {
+	{
+		.name = "aes",
+		.exec = aes_sw_test_exec,
+	},
+	{
+		.name = "aes-hw",
+		.exec = aes_hw_test_exec,
+	},
 };

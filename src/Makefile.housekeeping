@@ -236,7 +236,7 @@ BIN_AP		:= $(BIN_APS)
 BIN_SECUREBOOT	:=
 endif
 ifeq ($(BIN_AP),efi)
-BIN_ARCH	:= i386
+BIN_ARCH	:= x86_64
 BIN_PLATFORM	:= efi
 else
 BIN_ARCH	:= $(word 1,$(BIN_AP))
@@ -244,7 +244,7 @@ BIN_PLATFORM	:= $(word 2,$(BIN_AP))
 endif
 
 # Determine build architecture
-DEFAULT_ARCH	:= i386
+DEFAULT_ARCH	:= x86_64
 ARCH		:= $(firstword $(BIN_ARCH) $(DEFAULT_ARCH))
 CFLAGS		+= -DARCH=$(ARCH)
 arch :
@@ -488,9 +488,9 @@ CFLAGS		+= -g
 ifeq ($(CCTYPE),gcc)
 CFLAGS		+= -ffreestanding
 CFLAGS		+= -fno-common
-CFLAGS		+= -Wall -W -Wformat-nonliteral
+CFLAGS		+= -Wall -W -Wformat-nonliteral -Wshift-overflow=2
 CFLAGS		+= -Wno-array-bounds -Wno-dangling-pointer
-HOST_CFLAGS	+= -Wall -W -Wformat-nonliteral
+HOST_CFLAGS	+= -Wall -W -Wformat-nonliteral -Wshift-overflow=2
 HOST_CFLAGS	+= -Wno-array-bounds -Wno-dangling-pointer
 endif
 CFLAGS		+= $(WORKAROUND_CFLAGS) $(EXTRA_CFLAGS)
@@ -726,7 +726,7 @@ PRIVKEY_INC := $(BIN)/.private_key.der
 
 ifdef PRIVKEY
 $(PRIVKEY_INC) : $(PRIVKEY) $(PRIVKEY_LIST)
-	$(Q)$(OPENSSL) rsa -in $< -outform DER -out $@
+	$(Q)$(OPENSSL) pkey -in $< -outform DER -out $@
 
 privkey_DEPS	+= $(PRIVKEY_INC)
 UNANNOTATED	+= $(PRIVKEY_INC)
@@ -1042,7 +1042,7 @@ endif
 # Device ID tables (using IDs from ROM definition file)
 #
 define obj_pci_id_asm
-	.section ".note.GNU-stack", "", $(ASM_TCHAR)progbits
+	.section ".note.GNU-stack"
 	.section ".pci_devlist.$(1)", "a", $(ASM_TCHAR)progbits
 	.globl pci_devlist_$(1)
 pci_devlist_$(1):

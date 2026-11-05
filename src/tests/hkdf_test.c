@@ -39,79 +39,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/sha256.h>
 #include <ipxe/hkdf.h>
 #include <ipxe/test.h>
-
-/** Define inline input keying material */
-#define IKM(...) { __VA_ARGS__ }
-
-/** Define inline salt */
-#define SALT(...) { __VA_ARGS__ }
-
-/** Define inline additional information */
-#define INFO(...) { __VA_ARGS__ }
-
-/** Define inline expected pseudorandom key */
-#define PRK(...) { __VA_ARGS__ }
-
-/** Define inline expected output keying material */
-#define OKM(...) { __VA_ARGS__ }
-
-/** An HKDF self-test */
-struct hkdf_test {
-	/** Digest algorithm */
-	struct digest_algorithm *digest;
-	/** Input keying material */
-	const void *ikm;
-	/** Length of input keying material */
-	size_t ikm_len;
-	/** Salt */
-	const void *salt;
-	/** Length of salt */
-	size_t salt_len;
-	/** Additional information */
-	const void *info;
-	/** Length of additional information */
-	size_t info_len;
-	/** Expected pseudorandom key */
-	const void *prk;
-	/** Length of expected pseudorandom key */
-	size_t prk_len;
-	/** Expected output keying material */
-	const void *okm;
-	/** Length of expected output keying material */
-	size_t okm_len;
-};
-
-/**
- * Define an HKDF test
- *
- * @v name		Test name
- * @v DIGEST		Digest algorithm
- * @v SALTED		Use salt value
- * @v IKM		Input keying material
- * @v SALT		Salt
- * @v INFO		Additional information
- * @v PRK		Expected pseudorandom key
- * @v OKM		Expected output keying material
- */
-#define HKDF_TEST( name, DIGEST, SALTED, IKM, SALT, INFO, PRK, OKM )	\
-	static const uint8_t name ## _ikm[] = IKM;			\
-	static const uint8_t name ## _salt[] = SALT;			\
-	static const uint8_t name ## _info[] = INFO;			\
-	static const uint8_t name ## _prk[] = PRK;			\
-	static const uint8_t name ## _okm[] = OKM;			\
-	static struct hkdf_test name = {				\
-		.digest = DIGEST,					\
-		.ikm = name ## _ikm,					\
-		.ikm_len = sizeof ( name ## _ikm ),			\
-		.salt = ( SALTED ? name ## _salt : NULL ),		\
-		.salt_len = sizeof ( name ## _salt ),			\
-		.info = name ## _info,					\
-		.info_len = sizeof ( name ## _info ),			\
-		.prk = name ## _prk,					\
-		.prk_len = sizeof ( name ## _prk ),			\
-		.okm = name ## _okm,					\
-		.okm_len = sizeof ( name ## _okm ),			\
-	}
+#include "hkdf_test.h"
 
 /**
  * Report an HKDF test result
@@ -120,27 +48,68 @@ struct hkdf_test {
  * @v file		Test code file
  * @v line		Test code line
  */
-static void hkdf_okx ( struct hkdf_test *test, const char *file,
-		       unsigned int line ) {
+void hkdf_okx ( struct hkdf_test *test, const char *file,
+		unsigned int line ) {
 	size_t digestsize = test->digest->digestsize;
+	union {
+		uint8_t ikm[test->ikm_len];
+		uint8_t salt[test->salt_len];
+		uint8_t info[test->info_len];
+		uint8_t prk[digestsize];
+		uint8_t okm[test->okm_len];
+	} overlap;
 	uint8_t prk[digestsize];
 	uint8_t okm[test->okm_len];
+	size_t check_len;
 
 	/* Sanity checks */
 	okx ( ( test->salt != NULL ) || ( test->salt_len == 0 ), file, line );
-	okx ( test->prk_len == digestsize, file, line );
+	okx ( ( test->prk_len == 0 ) || ( test->prk_len == digestsize ),
+	      file, line );
 
 	/* Test extraction */
 	hkdf_extract ( test->digest, test->salt, test->salt_len, test->ikm,
 		       test->ikm_len, prk );
-	okx ( memcmp ( prk, test->prk, digestsize ) == 0, file, line );
+	if ( test->prk_len )
+		okx ( memcmp ( prk, test->prk, digestsize ) == 0, file, line );
 
 	/* Test expansion */
-	hkdf_expand ( test->digest, test->prk, test->info, test->info_len,
-		      okm, sizeof ( okm ) );
+	hkdf_expand ( test->digest, prk, test->info, test->info_len,
+		      okm, test->okm_len );
 	okx ( memcmp ( okm, test->okm, test->okm_len ) == 0, file, line );
+
+	/* Test overlap between salt and pseudorandom key */
+	if ( test->salt ) {
+		memcpy ( overlap.salt, test->salt, test->salt_len );
+		hkdf_extract ( test->digest, overlap.salt, test->salt_len,
+			       test->ikm, test->ikm_len, overlap.prk );
+		okx ( memcmp ( overlap.prk, prk, digestsize ) == 0,
+		      file, line );
+	}
+
+	/* Test overlap between input keying material and pseudorandom key */
+	memcpy ( overlap.ikm, test->ikm, test->ikm_len );
+	hkdf_extract ( test->digest, test->salt, test->salt_len, overlap.ikm,
+		       test->ikm_len, overlap.prk );
+	okx ( memcmp ( overlap.prk, prk, digestsize ) == 0, file, line );
+
+	/* Calculate length for expansion overlap tests */
+	check_len = test->okm_len;
+	if ( check_len > digestsize )
+		check_len = digestsize;
+
+	/* Test overlap between pseudorandom key and output */
+	memcpy ( overlap.prk, prk, digestsize );
+	hkdf_expand ( test->digest, overlap.prk, test->info, test->info_len,
+		      overlap.okm, test->okm_len );
+	okx ( memcmp ( overlap.okm, test->okm, check_len ) == 0, file, line );
+
+	/* Test overlap between additional information and output */
+	memcpy ( overlap.info, test->info, test->info_len );
+	hkdf_expand ( test->digest, prk, overlap.info, test->info_len,
+		      overlap.okm, test->okm_len );
+	okx ( memcmp ( overlap.okm, test->okm, check_len ) == 0, file, line );
 }
-#define hkdf_ok( test ) hkdf_okx ( test, __FILE__, __LINE__ )
 
 /** RFC 5869 test case 1: Basic test case with SHA-256 */
 HKDF_TEST ( hkdf_test_1, &sha256_algorithm, 1,

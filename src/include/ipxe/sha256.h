@@ -11,7 +11,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
+#include <endian.h>
 #include <ipxe/crypto.h>
+#include <ipxe/mdhash.h>
 
 /** SHA-256 number of rounds */
 #define SHA256_ROUNDS 64
@@ -49,27 +51,8 @@ struct sha256_digest_data {
 	union sha256_block data;
 } __attribute__ (( packed ));
 
-/** SHA-256 digest and data block */
-union sha256_digest_data_dwords {
-	/** Digest and data block */
-	struct sha256_digest_data dd;
-	/** Raw dwords */
-	uint32_t dword[ sizeof ( struct sha256_digest_data ) /
-			sizeof ( uint32_t ) ];
-};
-
-/** An SHA-256 context */
-struct sha256_context {
-	/** Amount of accumulated data */
-	size_t len;
-	/** Digest size */
-	size_t digestsize;
-	/** Digest and accumulated data */
-	union sha256_digest_data_dwords ddd;
-} __attribute__ (( packed ));
-
 /** SHA-256 context size */
-#define SHA256_CTX_SIZE sizeof ( struct sha256_context )
+#define SHA256_CTX_SIZE MDHASH_CTX_SIZE ( struct sha256_digest_data )
 
 /** SHA-256 block size */
 #define SHA256_BLOCK_SIZE sizeof ( union sha256_block )
@@ -80,11 +63,14 @@ struct sha256_context {
 /** SHA-224 digest size */
 #define SHA224_DIGEST_SIZE ( SHA256_DIGEST_SIZE * 224 / 256 )
 
-extern void sha256_family_init ( struct sha256_context *context,
-				 const struct sha256_digest *init,
-				 size_t digestsize );
-extern void sha256_update ( void *ctx, const void *data, size_t len );
-extern void sha256_final ( void *ctx, void *out );
+extern void sha256_compress ( struct sha256_digest_data *dd,
+			      const struct sha256_digest *digest );
+
+/** Define a SHA-256 family digest algorithm */
+#define SHA256_ALGORITHM( _name, _digest, _init, _digestsize )		\
+	MDHASH_ALGORITHM( _name, _digest, sha256_compress,		\
+			  __BIG_ENDIAN, struct sha256_digest_data,	\
+			  _init, _digestsize )
 
 extern struct digest_algorithm sha256_algorithm;
 extern struct digest_algorithm sha224_algorithm;

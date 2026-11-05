@@ -31,14 +31,20 @@ FILE_SECBOOT ( PERMITTED );
  */
 
 #include <ipxe/crypto.h>
+#include <ipxe/rsa.h>
 #include <ipxe/md5_sha1.h>
+
+/** Sentinel used to avoid explicit symbol references */
+char md5_sha1_sentinel[1];
 
 /**
  * Initialise MD5+SHA1 algorithm
  *
+ * @v digest		Digest algorithm
  * @v ctx		MD5+SHA1 context
  */
-static void md5_sha1_init ( void *ctx ) {
+static void md5_sha1_init ( struct digest_algorithm *digest __unused,
+			    void *ctx ) {
 	struct md5_sha1_context *context = ctx;
 
 	digest_init ( &md5_algorithm, context->md5 );
@@ -48,11 +54,13 @@ static void md5_sha1_init ( void *ctx ) {
 /**
  * Accumulate data with MD5+SHA1 algorithm
  *
+ * @v digest		Digest algorithm
  * @v ctx		MD5+SHA1 context
  * @v data		Data
  * @v len		Length of data
  */
-static void md5_sha1_update ( void *ctx, const void *data, size_t len ) {
+static void md5_sha1_update ( struct digest_algorithm *digest __unused,
+			      void *ctx, const void *data, size_t len ) {
 	struct md5_sha1_context *context = ctx;
 
 	digest_update ( &md5_algorithm, context->md5, data, len );
@@ -62,24 +70,31 @@ static void md5_sha1_update ( void *ctx, const void *data, size_t len ) {
 /**
  * Generate MD5+SHA1 digest
  *
+ * @v digest		Digest algorithm
  * @v ctx		MD5+SHA1 context
  * @v out		Output buffer
  */
-static void md5_sha1_final ( void *ctx, void *out ) {
+static void md5_sha1_final ( struct digest_algorithm *digest __unused,
+			     void *ctx, void *out ) {
 	struct md5_sha1_context *context = ctx;
-	struct md5_sha1_digest *digest = out;
+	struct md5_sha1_digest *output = out;
 
-	digest_final ( &md5_algorithm, context->md5, digest->md5 );
-	digest_final ( &sha1_algorithm, context->sha1, digest->sha1 );
+	digest_final ( &md5_algorithm, context->md5, output->md5 );
+	digest_final ( &sha1_algorithm, context->sha1, output->sha1 );
 }
 
 /** Hybrid MD5+SHA1 digest algorithm */
 struct digest_algorithm md5_sha1_algorithm = {
 	.name		= "md5+sha1",
 	.ctxsize	= sizeof ( struct md5_sha1_context ),
-	.blocksize	= 0, /* Not applicable */
+	.blocksize	= sizeof ( union md5_sha1_block ),
 	.digestsize	= sizeof ( struct md5_sha1_digest ),
 	.init		= md5_sha1_init,
 	.update		= md5_sha1_update,
 	.final		= md5_sha1_final,
+	.priv		= md5_sha1_sentinel,
 };
+
+/* Sanity checks */
+static_assert ( MD5_SHA1_BLOCK_SIZE == MD5_BLOCK_SIZE );
+static_assert ( MD5_SHA1_BLOCK_SIZE == SHA1_BLOCK_SIZE );

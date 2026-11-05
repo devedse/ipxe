@@ -1598,6 +1598,8 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	struct xhci_slot *slot;
 	struct xhci_endpoint *endpoint;
 	struct io_buffer *iobuf;
+	uint32_t cmplt;
+	unsigned int code;
 	int rc;
 
 	/* Profile transfer events */
@@ -1628,14 +1630,18 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	/* Unmap I/O buffer */
 	iob_unmap ( iobuf );
 
+	/* Parse completion */
+	cmplt = le32_to_cpu ( trb->cmplt );
+	code = XHCI_CMPLT_CODE ( cmplt );
+
 	/* Check for errors */
-	if ( ! ( ( trb->code == XHCI_CMPLT_SUCCESS ) ||
-		 ( trb->code == XHCI_CMPLT_SHORT ) ) ) {
+	if ( ! ( ( code == XHCI_CMPLT_SUCCESS ) ||
+		 ( code == XHCI_CMPLT_SHORT ) ) ) {
 
 		/* Construct error */
-		rc = -ECODE ( trb->code );
+		rc = -ECODE ( code );
 		DBGC ( xhci, "XHCI %s slot %d ctx %d failed (code %d): %s\n",
-		       xhci->name, slot->id, endpoint->ctx, trb->code,
+		       xhci->name, slot->id, endpoint->ctx, code,
 		       strerror ( rc ) );
 		DBGC_HDA ( xhci, 0, trb, sizeof ( *trb ) );
 
@@ -1649,7 +1655,7 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	}
 
 	/* Record actual transfer size */
-	iob_unput ( iobuf, le16_to_cpu ( trb->residual ) );
+	iob_unput ( iobuf, XHCI_CMPLT_RESIDUAL ( cmplt ) );
 
 	/* Sanity check (for successful completions only) */
 	assert ( xhci_ring_consumed ( &endpoint->ring ) ==
@@ -2160,7 +2166,7 @@ static void xhci_configure_endpoint_input ( struct xhci_device *xhci,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							( slot->ports ? 1 : 0 ),
 							slot->psiv, 0 ) );
 	slot_ctx->ports = slot->ports;
@@ -2226,7 +2232,7 @@ xhci_deconfigure_endpoint_input ( struct xhci_device *xhci __unused,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							0, 0, 0 ) );
 }
 
@@ -2281,7 +2287,7 @@ static void xhci_evaluate_context_input ( struct xhci_device *xhci,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							0, 0, 0 ) );
 
 	/* Populate endpoint context */

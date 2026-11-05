@@ -40,6 +40,78 @@ FILE_SECBOOT ( PERMITTED );
  *
  * ASN.1 encoding
  *
+ * @anchor asn1parse
+ *
+ * The ASN.1 parsing helper functions are designed to be safe to use
+ * on untrusted input, including malformed input.  Any parsing error
+ * will cause the function to invalidate the cursor by setting its
+ * length field to zero before returning.
+ *
+ * All parsing helper functions will strictly respect the cursor's
+ * bounds for all purposes (including for determining the tag type and
+ * the tag length).  An invalidated cursor (or any cursor that happens
+ * to naturally end up with a zero length, e.g. by skipping the only
+ * existent object) may therefore safely be passed in to any parsing
+ * helper function.
+ *
+ * A consequence of this design is that it is not necessary to check
+ * the return status from all parsing helper functions in a sequence,
+ * only to check the return status from the last.  The standard C
+ * comma operator may safely be used to connect a sequence of ASN.1
+ * parsing operations.  For example:
+ *
+ * @code
+ *
+ *	if ( ( rc = ( asn1_enter ( cursor, ASN1_SEQUENCE ),
+ *		      asn1_skip ( cursor, ASN1_INTEGER ),
+ *		      asn1_enter ( cursor, ASN1_SEQUENCE ) ) ) != 0 ) {
+ *		return rc;
+ *	}
+ *
+ * @endcode
+ *
+ * or equivalently, just:
+ *
+ * @code
+ *
+ *	asn1_enter ( cursor, ASN1_SEQUENCE );
+ *	asn1_skip ( cursor, ASN1_INTEGER );
+ *	if ( ( rc = asn1_enter ( cursor, ASN1_SEQUENCE ) ) != 0 )
+ *		return rc;
+ *
+ * @endcode
+ *
+ * The caller may not need to check the return status from the parsing
+ * helper functions at all.  For example, a caller that is trying to
+ * extract a fixed-length octet string from within a deeply nested
+ * ASN.1 structure may simply check that the resulting cursor length
+ * is correct (which it would have to check anyway).  Since any error
+ * will produce a zero-length cursor, this check would also suffice to
+ * catch any parsing errors.
+ *
+ * The cursor navigation functions such as asn1_enter() and
+ * asn1_skip() will validate the type and length bytes (which they
+ * consume themselves), but will not otherwise validate the contents
+ * of the cursor.  Callers must perform their own validation after
+ * navigating to the expected data structure (e.g. by checking that
+ * the resulting length is correct), or use the higher-level helpers
+ * such as asn1_boolean() and asn1_integer() that validate and extract
+ * the semantic contents of cursors.
+ *
+ * The type @c ASN1_ANY may be used as a wildcard type to enter or
+ * skip an object of any type.
+ *
+ * The function asn1_skip_if_exists() may be useful when parsing
+ * objects where an encountered type is not knowable in advance
+ * (e.g. for sequences containing optional elements).  If the
+ * potential type is not found, then asn1_skip_if_exists() will return
+ * an error but will not invalidate the cursor (since a missing
+ * optional object is not a parsing error).
+ *
+ * The function asn1_type() may be used to determine the type of an
+ * unknown object.  Calling asn1_type() on an invalidated cursor will
+ * return @c ASN1_END (and the cursor will remain invalidated).
+ *
  */
 
 /* Disambiguate the various error causes */
@@ -79,6 +151,10 @@ FILE_SECBOOT ( PERMITTED );
 	__einfo_error ( EINFO_ENOTSUP_ALGORITHM )
 #define EINFO_ENOTSUP_ALGORITHM \
 	__einfo_uniqify ( EINFO_ENOTSUP, 0x01, "Unsupported algorithm" )
+#define ENOTSUP_HIGH \
+	__einfo_error ( EINFO_ENOTSUP_HIGH )
+#define EINFO_ENOTSUP_HIGH \
+	__einfo_uniqify ( EINFO_ENOTSUP, 0x02, "Unsupported high tag number" )
 #define ENOTTY_ALGORITHM \
 	__einfo_error ( EINFO_ENOTTY_ALGORITHM )
 #define EINFO_ENOTTY_ALGORITHM \
@@ -103,6 +179,7 @@ FILE_SECBOOT ( PERMITTED );
 static int asn1_start ( struct asn1_cursor *cursor, unsigned int type ) {
 	unsigned int len_len;
 	unsigned int len;
+	uint8_t high_byte;
 
 	/* Sanity check */
 	if ( cursor->len < 2 /* Tag byte and first length byte */ ) {
@@ -110,6 +187,14 @@ static int asn1_start ( struct asn1_cursor *cursor, unsigned int type ) {
 			DBGC ( cursor, "ASN1 %p too short\n", cursor );
 		asn1_invalidate_cursor ( cursor );
 		return -EINVAL_ASN1_EMPTY;
+	}
+
+	/* Refuse to handle multi-byte tags */
+	if ( ( asn1_type ( cursor ) & ASN1_HIGH ) == ASN1_HIGH ) {
+		DBGC ( cursor, "ASN1 %p has unsupported high tag number\n",
+		       cursor );
+		asn1_invalidate_cursor ( cursor );
+		return -ENOTSUP_HIGH;
 	}
 
 	/* Check the tag byte */
@@ -130,22 +215,29 @@ static int asn1_start ( struct asn1_cursor *cursor, unsigned int type ) {
 	} else {
 		len_len = 1;
 	}
-	if ( cursor->len < len_len ) {
-		DBGC ( cursor, "ASN1 %p bad length field length %d (max "
-		       "%zd)\n", cursor, len_len, cursor->len );
+	if ( ( len_len == 0 ) || ( cursor->len < len_len ) ) {
+		DBGC ( cursor, "ASN1 %p bad length field length %d (min 0, "
+		       "max %zd)\n", cursor, len_len, cursor->len );
 		asn1_invalidate_cursor ( cursor );
 		return -EINVAL_ASN1_LEN_LEN;
 	}
 
 	/* Extract the length and sanity check */
 	for ( len = 0 ; len_len ; len_len-- ) {
+		high_byte = ( len >> ( 8 * ( sizeof ( len ) - 1 ) ) );
+		if ( high_byte ) {
+			DBGC ( cursor, "ASN1 %p unrepresentable length\n",
+			       cursor );
+			asn1_invalidate_cursor ( cursor );
+			return -EINVAL_ASN1_LEN;
+		}
 		len <<= 8;
 		len |= *( ( uint8_t * ) cursor->data );
 		cursor->data++;
 		cursor->len--;
 	}
-	if ( cursor->len < len ) {
-		DBGC ( cursor, "ASN1 %p bad length %d (max %zd)\n",
+	if ( ( cursor->len < len ) || ( ( ( int ) len ) < 0 ) ) {
+		DBGC ( cursor, "ASN1 %p bad length %d (min 0, max %zd)\n",
 		       cursor, len, cursor->len );
 		asn1_invalidate_cursor ( cursor );
 		return -EINVAL_ASN1_LEN;
@@ -315,7 +407,6 @@ int asn1_enter_bits ( struct asn1_cursor *cursor, unsigned int *unused ) {
 	} __attribute__ (( packed )) *bit_string;
 	const uint8_t *last;
 	unsigned int unused_bits;
-	uint8_t unused_mask;
 	int rc;
 
 	/* Enter bit string */
@@ -330,16 +421,15 @@ int asn1_enter_bits ( struct asn1_cursor *cursor, unsigned int *unused ) {
 		return -EINVAL_BIT_STRING;
 	}
 	bit_string = cursor->data;
+	last = ( cursor->data + cursor->len - 1 );
 	cursor->data = &bit_string->data;
 	cursor->len -= offsetof ( typeof ( *bit_string ), data );
 	unused_bits = bit_string->unused;
 
 	/* Check validity of unused bits */
-	unused_mask = ( 0xff >> ( 8 - unused_bits ) );
-	last = ( cursor->data + cursor->len - 1 );
 	if ( ( unused_bits >= 8 ) ||
 	     ( ( unused_bits > 0 ) && ( cursor->len == 0 ) ) ||
-	     ( ( *last & unused_mask ) != 0 ) ) {
+	     ( ( *last & ( 0xffU >> ( 8 - unused_bits ) ) ) != 0 ) ) {
 		DBGC ( cursor, "ASN1 %p invalid bit string:\n", cursor );
 		DBGC_HDA ( cursor, 0, cursor->data, cursor->len );
 		asn1_invalidate_cursor ( cursor );
@@ -367,17 +457,35 @@ int asn1_enter_bits ( struct asn1_cursor *cursor, unsigned int *unused ) {
  * @ret rc		Return status code
  */
 int asn1_enter_unsigned ( struct asn1_cursor *cursor ) {
+	uint8_t msb;
 	int rc;
 
 	/* Enter integer */
 	if ( ( rc = asn1_enter ( cursor, ASN1_INTEGER ) ) != 0 )
 		return rc;
 
-	/* Skip initial positive sign byte if applicable */
-	if ( ( cursor->len > 1 ) &&
-	     ( *( ( uint8_t * ) cursor->data ) == 0x00 ) ) {
+	/* Reject empty integers */
+	if ( ! cursor->len ) {
+		DBGC ( cursor, "ASN1 %p empty unsigned integer\n", cursor );
+		/* Cursor is already invalid */
+		return -EINVAL;
+	}
+
+	/* Reject negative values */
+	msb = *( ( uint8_t * ) cursor->data );
+	if ( msb & 0x80 ) {
+		DBGC ( cursor, "ASN1 %p negative unsigned integer:\n",
+		       cursor );
+		DBGC_HDA ( cursor, 0, cursor->data, cursor->len );
+		asn1_invalidate_cursor ( cursor );
+		return -EINVAL;
+	}
+
+	/* Skip any initial positive sign byte(s) */
+	while ( ( cursor->len > 1 ) && ( msb == 0x00 ) ) {
 		cursor->data++;
 		cursor->len--;
+		msb = *( ( uint8_t * ) cursor->data );
 	}
 
 	return 0;
@@ -907,6 +1015,18 @@ static size_t asn1_header ( struct asn1_builder_header *header,
 }
 
 /**
+ * Calculate ASN.1 header length
+ *
+ * @v len		Content length
+ * @ret header_len	Header length
+ */
+size_t asn1_header_len ( size_t len ) {
+	struct asn1_builder_header header;
+
+	return asn1_header ( &header, ASN1_ANY, len );
+}
+
+/**
  * Grow ASN.1 builder
  *
  * @v builder		ASN.1 builder
@@ -925,7 +1045,7 @@ int asn1_grow ( struct asn1_builder *builder, size_t extra ) {
 	new_len = ( builder->len + extra );
 	new = realloc ( builder->data, new_len );
 	if ( ! new ) {
-		free ( builder->data );
+		zfree ( builder->data );
 		builder->data = NULL;
 		return -ENOMEM;
 	}
