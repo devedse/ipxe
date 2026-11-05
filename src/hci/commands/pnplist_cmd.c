@@ -54,7 +54,11 @@ FILE_SECBOOT ( PERMITTED );
 /** Maximum number of bridges between the PCI root bus and a NIC */
 #define PNP_MAX_HOPS 16
 
-/** A PCI device's Windows hardware-ID fields */
+/** A PCI device's Windows hardware-ID fields
+ *
+ * The subsystem IDs are reported as they are, even when zero: Windows
+ * then names the device e.g. PCI\VEN_8086&DEV_10D3&SUBSYS_00008086.
+ */
 struct pnp_hop {
 	/** Vendor ID */
 	uint16_t vendor;
@@ -354,17 +358,6 @@ static int pnp_read_nic ( struct net_device *netdev, struct pnp_nic *nic ) {
 	pnp_read_dsn ( &pci, nic );
 
 	printf ( "DEBUG: Final values - vendor=0x%04x device=0x%04x subsys_vendor=0x%04x subsys_device=0x%04x rev=0x%02x\n", nic->id.vendor, nic->id.device, nic->id.subsys_vendor, nic->id.subsys_device, nic->id.revision );
-	if ( ( nic->id.subsys_vendor == 0x0000 ) ||
-	     ( nic->id.subsys_device == 0x0000 ) ) {
-		/* No valid subsystem ID - use vendor and device ID as
-		 * fallback.
-		 */
-		printf ( "DEBUG: Using fallback subsystem IDs (invalid subsystem)\n" );
-		nic->id.subsys_vendor = nic->id.vendor;
-		nic->id.subsys_device = nic->id.device;
-	} else {
-		printf ( "DEBUG: Using actual subsystem IDs\n" );
-	}
 
 	/* Read the bridge chain */
 	pnp_walk_chain ( &pci, nic );
