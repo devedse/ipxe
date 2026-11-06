@@ -460,6 +460,10 @@ FILE_SECBOOT ( PERMITTED );
 #define ERRFILE_tlskey		      ( ERRFILE_OTHER | 0x006e0000 )
 #define ERRFILE_gcm		      ( ERRFILE_OTHER | 0x006f0000 )
 #define ERRFILE_tlsfmt		      ( ERRFILE_OTHER | 0x00700000 )
+/* Fork-only (devedse/ipxe): uses the last free number so that it stays
+ * clear of the numbers upstream hands out in sequence.
+ */
+#define ERRFILE_pnplist_cmd	      ( ERRFILE_OTHER | 0x007f0000 )
 
 /** @} */
 

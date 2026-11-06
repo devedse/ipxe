@@ -116,6 +116,7 @@ FILE_SECBOOT ( PERMITTED );
 #define PCI_CMD			/* PCI commands */
 #define PEERMGMT_CMD		/* PeerDist management commands */
 //#define PING_CMD		/* Ping command */
+//#define PNPLIST_CMD		/* PNP device path listing command */
 //#define PROFSTAT_CMD		/* Profiling commands */
 //#define PXE_CMD		/* PXE commands */
 #define ROUTE_CMD		/* Routing table management commands */

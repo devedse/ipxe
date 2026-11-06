@@ -95,6 +95,7 @@ FILE_SECBOOT ( PERMITTED );
 #define PCI_CAP_ID_PM			0x01	/**< Power management */
 #define PCI_CAP_ID_VPD			0x03	/**< Vital product data */
 #define PCI_CAP_ID_VNDR			0x09	/**< Vendor-specific */
+#define PCI_CAP_ID_SSVID		0x0d	/**< Subsystem ID and Subsystem Vendor ID (bridges) */
 #define PCI_CAP_ID_EXP			0x10	/**< PCI Express */
 #define PCI_CAP_ID_MSIX			0x11	/**< MSI-X */
 #define PCI_CAP_ID_EA			0x14	/**< Enhanced Allocation */
@@ -104,6 +105,19 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Capability length */
 #define PCI_CAP_LEN		0x02
+
+/** Start of PCI Express extended capability list */
+#define PCI_EXT_CAPABILITY_LIST	0x100
+
+/** PCI Express extended capability header fields */
+#define PCI_EXT_CAP_ID( hdr )	( (hdr) & 0xffff )
+#define PCI_EXT_CAP_VER( hdr )	( ( (hdr) >> 16 ) & 0xf )
+#define PCI_EXT_CAP_NEXT( hdr )	( ( (hdr) >> 20 ) & 0xffc )
+
+/** Device Serial Number extended capability */
+#define PCI_EXT_CAP_DSN		0x0003
+#define PCI_DSN_LOWER		0x04	/**< Lower 32 bits of serial number */
+#define PCI_DSN_UPPER		0x08	/**< Upper 32 bits of serial number */
 
 /** Power management control and status */
 #define PCI_PM_CTRL		0x04
@@ -334,6 +348,7 @@ extern void pci_remove ( struct pci_device *pci );
 extern int pci_find_capability ( struct pci_device *pci, int capability );
 extern int pci_find_next_capability ( struct pci_device *pci,
 				      int pos, int capability );
+extern int pci_find_ext_capability ( struct pci_device *pci, int capability );
 extern void pci_reset ( struct pci_device *pci, unsigned int exp );
 
 /**

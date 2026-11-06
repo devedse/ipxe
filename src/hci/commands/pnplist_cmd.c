@@ -1,0 +1,796 @@
+/*
+ * Copyright (C) 2025 iPXE Project.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ *
+ * You can also choose to distribute this program under the terms of
+ * the Unmodified Binary Distribution Licence (as given in the file
+ * COPYING.UBDL), provided that you have satisfied its requirements.
+ */
+
+FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <getopt.h>
+#include <ipxe/netdevice.h>
+#include <ipxe/pci.h>
+#include <ipxe/command.h>
+#include <ipxe/parseopt.h>
+#include <ipxe/settings.h>
+#include <ipxe/vsprintf.h>
+#ifdef PLATFORM_efi
+#include <ipxe/uuid.h>
+#include <ipxe/efi/efi.h>
+#include <ipxe/efi/efi_driver.h>
+#include <ipxe/efi/efi_path.h>
+#endif
+
+/** @file
+ *
+ * PNP device path listing command
+ *
+ * Lists each PCI network device the way Windows identifies it, so that
+ * a NIC driver can be injected into an offline Windows image for that
+ * exact device: the hardware ID, the instance ID taken from the PCIe
+ * Device Serial Number (when the NIC has one), and otherwise the chain
+ * of PCI bridges from the root bus to the NIC, from which the host
+ * computes the location-based instance ID that Windows will use.
+ *
+ * A Hyper-V (generation 2) VM's network adapter is not a PCI device but
+ * a VMBus channel, driven through the firmware's SNP.  Windows names it
+ * VMBUS\{device class}\{channel instance}, and both GUIDs are in the
+ * firmware's device path for it, so those are listed instead.
+ *
+ * With --store, the result is stored as a URL-encoded query string
+ * (net0_ven=0x8086&net0_dev=...).
+ */
+
+/** Maximum number of bridges between the PCI root bus and a NIC */
+#define PNP_MAX_HOPS 16
+
+/** PCI Express capability: PCI Express Capabilities register */
+#define PNP_EXP_FLAGS		0x02
+/** PCI Express capability: device/port type field */
+#define PNP_EXP_FLAGS_TYPE( flags ) ( ( (flags) >> 4 ) & 0xf )
+/** PCI Express capability: slot implemented */
+#define PNP_EXP_FLAGS_SLOT	0x0100
+/** PCI Express capability: Slot Capabilities register */
+#define PNP_EXP_SLTCAP		0x14
+/** Slot Capabilities: hot-plug surprise */
+#define PNP_EXP_SLTCAP_HPS	0x00000020
+/** Slot Capabilities: hot-plug capable */
+#define PNP_EXP_SLTCAP_HPC	0x00000040
+
+/** A PCI device's Windows hardware-ID fields
+ *
+ * The subsystem IDs are reported as they are, even when zero: Windows
+ * then names the device e.g. PCI\VEN_8086&DEV_10D3&SUBSYS_00008086.
+ *
+ * The PCI Express registers are reported raw, for the host to work out
+ * when Windows names a NIC by its Device Serial Number and when by its
+ * location: that is not decided by the NIC, so it is presumably decided
+ * by the port above it (e.g. whether it is a hot-plug capable slot).
+ */
+struct pnp_hop {
+	/** Vendor ID */
+	uint16_t vendor;
+	/** Device ID */
+	uint16_t device;
+	/** Subsystem vendor ID */
+	uint16_t subsys_vendor;
+	/** Subsystem ID */
+	uint16_t subsys_device;
+	/** Revision */
+	uint8_t revision;
+	/** Device and function number: (slot << 3) | func */
+	uint8_t devfn;
+	/** PCI Express Capabilities register (0 if not a PCI Express device) */
+	uint16_t pcie_flags;
+	/** Slot Capabilities register (0 if no slot is implemented) */
+	uint32_t slot_cap;
+};
+
+/** Length of a GUID in text form, including the NUL */
+#define PNP_GUID_LEN 37
+
+/** What pnplist reports about one network device */
+struct pnp_nic {
+	/** Network device */
+	struct net_device *netdev;
+	/** The NIC is a Hyper-V VMBus channel rather than a PCI device */
+	int vmbus;
+	/** VMBus device class (f8615163-... for a network adapter) */
+	char vmbus_class[PNP_GUID_LEN];
+	/** VMBus channel instance: the instance ID Windows gives the NIC */
+	char vmbus_instance[PNP_GUID_LEN];
+	/** PCI bus:dev.fn address */
+	unsigned int busdevfn;
+	/** Hardware-ID fields */
+	struct pnp_hop id;
+	/** Instance ID from the Device Serial Number, or empty */
+	char instance[24];
+	/** Bridge chain ends at the first PCI root */
+	int chain_complete;
+	/** Number of bridges in the chain */
+	unsigned int nbridges;
+	/** Bridges, from the one on the root bus to the NIC's parent */
+	struct pnp_hop bridges[PNP_MAX_HOPS];
+};
+
+/** "pnplist" options */
+struct pnplist_options {
+	/** Variable name to store output */
+	char *store;
+};
+
+/** "pnplist" option list */
+static struct option_descriptor pnplist_opts[] = {
+	OPTION_DESC ( "store", 's', required_argument,
+		      struct pnplist_options, store, parse_string ),
+};
+
+/** "pnplist" command descriptor */
+static struct command_descriptor pnplist_cmd =
+	COMMAND_DESC ( struct pnplist_options, pnplist_opts, 0, 0,
+		       "[--store <variable>]" );
+
+/**
+ * Get the PCI device underlying a network device
+ *
+ * The network device's generic device is a struct pci_device only
+ * when one of iPXE's own PCI drivers drives the NIC.  When the NIC is
+ * driven through the firmware's SNP, NII or MNP protocols, it is a
+ * plain struct device that carries a copy of the PCI device's
+ * description.  Both record the PCI location, so read the PCI device
+ * from there instead of assuming a struct pci_device.
+ *
+ * @v netdev		Network device
+ * @v pci		PCI device to fill in
+ * @ret rc		Return status code
+ */
+static int pnp_get_pci_device ( struct net_device *netdev,
+				struct pci_device *pci ) {
+	struct device_description *desc = &netdev->dev->desc;
+	int rc;
+
+	printf ( "DEBUG: Getting PCI device for netdev '%s'\n", netdev->name );
+	if ( desc->bus_type != BUS_TYPE_PCI ) {
+		printf ( "DEBUG: Device bus_type is not PCI (bus_type=%d)\n",
+			 desc->bus_type );
+		return -ENODEV;
+	}
+
+	memset ( pci, 0, sizeof ( *pci ) );
+	pci_init ( pci, desc->location );
+	if ( ( rc = pci_read_config ( pci ) ) != 0 ) {
+		printf ( "DEBUG: No PCI device at %04x:%02x:%02x.%x\n",
+			 PCI_SEG ( pci->busdevfn ), PCI_BUS ( pci->busdevfn ),
+			 PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+		return rc;
+	}
+	printf ( "DEBUG: PCI device found - vendor=0x%04x device=0x%04x bus=%d slot=%d func=%d\n", pci->vendor, pci->device, PCI_BUS ( pci->busdevfn ), PCI_SLOT ( pci->busdevfn ), PCI_FUNC ( pci->busdevfn ) );
+
+	return 0;
+}
+
+/**
+ * Read a device's subsystem IDs, honouring the header type
+ *
+ * Type-0 (normal) devices carry the subsystem IDs at config 0x2c/0x2e.
+ * Type-1 (PCI-to-PCI bridge) devices do NOT; Windows takes a bridge's
+ * subsystem from the Subsystem ID / Subsystem Vendor ID capability
+ * (cap 0x0d), or uses 0x0000/0x0000 when that capability is absent.
+ * Getting this right matters: the host hashes the bridge's full hardware
+ * id, so a wrong subsystem here silently breaks the child's instance ID.
+ *
+ * @v pci		PCI device
+ * @v ssv		Subsystem vendor ID to fill in
+ * @v ssd		Subsystem ID to fill in
+ */
+static void pnp_read_subsys ( struct pci_device *pci, uint16_t *ssv,
+			      uint16_t *ssd ) {
+	int cap;
+
+	*ssv = 0x0000;
+	*ssd = 0x0000;
+
+	if ( ( pci->hdrtype & PCI_HEADER_TYPE_MASK ) ==
+	     PCI_HEADER_TYPE_NORMAL ) {
+		pci_read_config_word ( pci, PCI_SUBSYSTEM_VENDOR_ID, ssv );
+		pci_read_config_word ( pci, PCI_SUBSYSTEM_ID, ssd );
+	} else if ( ( cap = pci_find_capability ( pci,
+						  PCI_CAP_ID_SSVID ) ) ) {
+		pci_read_config_word ( pci, ( cap + 0x04 ), ssv );
+		pci_read_config_word ( pci, ( cap + 0x06 ), ssd );
+	}
+
+	/* Normalise "no device" (0xffff) to 0x0000, matching Windows */
+	if ( *ssv == 0xffff )
+		*ssv = 0x0000;
+	if ( *ssd == 0xffff )
+		*ssd = 0x0000;
+}
+
+/**
+ * Read a PCI device's hardware-ID fields
+ *
+ * @v pci		PCI device
+ * @v hop		Hardware-ID fields to fill in
+ * @ret rc		Status of reading the revision (0x00 if it failed)
+ */
+static int pnp_fill_hop ( struct pci_device *pci, struct pnp_hop *hop ) {
+	int exp;
+	int rc;
+
+	hop->vendor = pci->vendor;
+	hop->device = pci->device;
+	if ( ( rc = pci_read_config_byte ( pci, PCI_REVISION,
+					   &hop->revision ) ) != 0 )
+		hop->revision = 0x00;
+	pnp_read_subsys ( pci, &hop->subsys_vendor, &hop->subsys_device );
+	hop->devfn = ( pci->busdevfn & 0xff );
+
+	/* PCI Express port/slot registers */
+	hop->pcie_flags = 0;
+	hop->slot_cap = 0;
+	if ( ( exp = pci_find_capability ( pci, PCI_CAP_ID_EXP ) ) ) {
+		pci_read_config_word ( pci, ( exp + PNP_EXP_FLAGS ),
+				       &hop->pcie_flags );
+		if ( hop->pcie_flags & PNP_EXP_FLAGS_SLOT ) {
+			pci_read_config_dword ( pci, ( exp + PNP_EXP_SLTCAP ),
+						&hop->slot_cap );
+		}
+	}
+
+	return rc;
+}
+
+/**
+ * Find the PCI-to-PCI bridge whose secondary bus number matches a target bus
+ *
+ * This is the immediate parent bridge of any device on @c target_bus.
+ * Bus numbers are only unique within a PCI segment, so only bridges in
+ * the same segment are considered.
+ *
+ * @v segment		PCI segment of the target bus
+ * @v target_bus	Secondary bus number to match
+ * @v out		PCI device to fill with the bridge on success
+ * @ret found		1 if a parent bridge was found, 0 otherwise
+ */
+static int pnp_find_parent_bridge ( unsigned int segment,
+				    unsigned int target_bus,
+				    struct pci_device *out ) {
+	uint32_t busdevfn = PCI_BUSDEVFN ( segment, 0, 0, 0 );
+	uint8_t sec;
+
+	while ( ( pci_find_next ( out, &busdevfn ) == 0 ) &&
+		( PCI_SEG ( busdevfn ) == segment ) ) {
+		if ( ( ( out->hdrtype & PCI_HEADER_TYPE_MASK ) ==
+		       PCI_HEADER_TYPE_BRIDGE ) &&
+		     ( pci_read_config_byte ( out, PCI_SECONDARY, &sec ) == 0 ) &&
+		     ( sec == target_bus ) ) {
+			return 1;
+		}
+		busdevfn++;
+	}
+	return 0;
+}
+
+/**
+ * Read the instance ID from a NIC's PCIe Device Serial Number
+ *
+ * When present, Windows uses the DSN as the device instance ID suffix,
+ * formatted as the upper dword followed by the lower dword (each as 8
+ * uppercase hex digits) followed by "00".  This is the machine-specific
+ * value needed for offline driver injection.  When the DSN is absent,
+ * Windows falls back to a location-based instance ID, which the host
+ * computes from the bridge chain.
+ *
+ * @v pci		PCI device
+ * @v nic		NIC report to fill in
+ */
+static void pnp_read_dsn ( struct pci_device *pci, struct pnp_nic *nic ) {
+	uint32_t dsn_lo = 0;
+	uint32_t dsn_hi = 0;
+	int dsn_pos;
+
+	dsn_pos = pci_find_ext_capability ( pci, PCI_EXT_CAP_DSN );
+	if ( dsn_pos ) {
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_LOWER ),
+					&dsn_lo );
+		pci_read_config_dword ( pci, ( dsn_pos + PCI_DSN_UPPER ),
+					&dsn_hi );
+		/* Treat an all-zero or all-ones serial number as absent */
+		if ( ! ( ( ( dsn_lo == 0x00000000 ) &&
+			   ( dsn_hi == 0x00000000 ) ) ||
+			 ( ( dsn_lo == 0xffffffff ) &&
+			   ( dsn_hi == 0xffffffff ) ) ) ) {
+			snprintf ( nic->instance, sizeof ( nic->instance ),
+				   "%08X%08X00", dsn_hi, dsn_lo );
+		}
+	}
+	printf ( "DEBUG: DSN ext cap @0x%x present=%d hi=0x%08x lo=0x%08x "
+		 "instance=%s\n", dsn_pos, ( nic->instance[0] != '\0' ),
+		 dsn_hi, dsn_lo, nic->instance );
+}
+
+/**
+ * Walk the PCI bridges from a NIC up to the root bus
+ *
+ * The host needs the NIC's bridge chain to reconstruct the no-DSN,
+ * location-based Windows instance ID offline.  The walk follows each
+ * bus's parent bridge (the bridge whose secondary bus it is) up to bus
+ * 0, and records only the bridges: the NIC itself is already described
+ * by its own fields.  Each bridge carries its Windows hardware-id fields
+ * plus its own devfn byte; the host assembles and hashes these.
+ *
+ * The chain is complete when it ends at bus 0 of segment 0: the host
+ * computes the ID for the first PCI root (ACPI\PNP0A08\0).  A topology
+ * gap, or a chain that ends at another PCI root, leaves it incomplete,
+ * so that the host keeps the driver package's instance ID rather than
+ * computing a wrong one.  A complete chain may have zero bridges, when
+ * the NIC sits on the root bus itself.  An incomplete chain still lists
+ * the bridges that were found.
+ *
+ * @v pci		PCI device of the NIC
+ * @v nic		NIC report to fill in
+ */
+static void pnp_walk_chain ( struct pci_device *pci, struct pnp_nic *nic ) {
+	struct pnp_hop hops[PNP_MAX_HOPS];
+	struct pci_device parent;
+	unsigned int segment = PCI_SEG ( pci->busdevfn );
+	unsigned int bus = PCI_BUS ( pci->busdevfn );
+	unsigned int count = 0;
+	unsigned int i;
+
+	/* Walk up, collecting the bridges from the NIC's parent upwards */
+	while ( 1 ) {
+		if ( bus == 0 ) {
+			nic->chain_complete = ( segment == 0 );
+			break;
+		}
+		if ( count >= PNP_MAX_HOPS )
+			break;
+		if ( ! pnp_find_parent_bridge ( segment, bus, &parent ) )
+			break;
+		pnp_fill_hop ( &parent, &hops[count++] );
+		bus = PCI_BUS ( parent.busdevfn );
+	}
+
+	/* Record the chain from the root bus downwards */
+	for ( i = 0 ; i < count ; i++ )
+		nic->bridges[i] = hops[ count - 1 - i ];
+	nic->nbridges = count;
+}
+
+#ifdef PLATFORM_efi
+
+/** Vendor GUID of a Hyper-V VMBus channel node in a firmware device path */
+static EFI_GUID pnp_vmbus_path_guid = {
+	0x9b17e5a2, 0x0891, 0x42dd,
+	{ 0xb6, 0x53, 0x80, 0xb5, 0xc2, 0x28, 0x09, 0xba }
+};
+
+/** A Hyper-V VMBus channel node in a firmware device path
+ *
+ * Hyper-V's generation 2 firmware describes a VMBus device as
+ * AcpiEx(VMBus,0,0)/VenHw(9B17E5A2-0891-42DD-B653-80B5C22809BA,<data>),
+ * where the vendor data is the channel's device class (interface type)
+ * followed by its instance GUID.
+ */
+struct pnp_vmbus_path {
+	/** Vendor device path header */
+	VENDOR_DEVICE_PATH vendor;
+	/** Device class */
+	EFI_GUID type;
+	/** Channel instance */
+	EFI_GUID instance;
+} __attribute__ (( packed ));
+
+/**
+ * Format an EFI GUID as text, the way Windows writes it in instance IDs
+ *
+ * @v guid		EFI GUID
+ * @v buf		Buffer to fill in (PNP_GUID_LEN bytes)
+ */
+static void pnp_guid_text ( EFI_GUID *guid, char *buf ) {
+	union uuid uuid;
+
+	/* An EFI GUID stores its first three fields little-endian */
+	memcpy ( &uuid, guid, sizeof ( uuid ) );
+	uuid_mangle ( &uuid );
+	snprintf ( buf, PNP_GUID_LEN, "%s", uuid_ntoa ( &uuid ) );
+}
+
+/**
+ * Read a Hyper-V VMBus network adapter from its firmware device path
+ *
+ * @v netdev		Network device
+ * @v nic		NIC report to fill in
+ * @ret rc		Return status code (-ENODEV if not a VMBus device)
+ */
+static int pnp_read_vmbus ( struct net_device *netdev, struct pnp_nic *nic ) {
+	struct efi_device *efidev;
+	EFI_DEVICE_PATH_PROTOCOL *path;
+	struct pnp_vmbus_path *vmbus;
+	size_t len;
+
+	/* Only a NIC driven through the firmware has a device path */
+	if ( netdev->dev->desc.bus_type != BUS_TYPE_EFI )
+		return -ENODEV;
+	efidev = efidev_parent ( netdev->dev );
+	if ( ! efidev ) {
+		printf ( "DEBUG: No EFI device found for '%s'\n", netdev->name );
+		return -ENODEV;
+	}
+	printf ( "DEBUG: %s EFI device path: %s\n",
+		 netdev->name, efi_devpath_text ( efidev->path ) );
+
+	/* Look for the VMBus channel node */
+	for ( path = efidev->path ; path ; path = efi_path_next ( path ) ) {
+		if ( path->Type == END_DEVICE_PATH_TYPE )
+			break;
+		len = ( ( path->Length[1] << 8 ) | path->Length[0] );
+		if ( ( path->Type != HARDWARE_DEVICE_PATH ) ||
+		     ( path->SubType != HW_VENDOR_DP ) ||
+		     ( len < sizeof ( *vmbus ) ) )
+			continue;
+		vmbus = container_of ( path, struct pnp_vmbus_path,
+				       vendor.Header );
+		if ( memcmp ( &vmbus->vendor.Guid, &pnp_vmbus_path_guid,
+			      sizeof ( pnp_vmbus_path_guid ) ) != 0 )
+			continue;
+		pnp_guid_text ( &vmbus->type, nic->vmbus_class );
+		pnp_guid_text ( &vmbus->instance, nic->vmbus_instance );
+		nic->vmbus = 1;
+		return 0;
+	}
+
+	return -ENODEV;
+}
+
+#else /* PLATFORM_efi */
+
+/**
+ * Read a Hyper-V VMBus network adapter (only possible on EFI)
+ *
+ * @v netdev		Network device
+ * @v nic		NIC report to fill in
+ * @ret rc		Return status code
+ */
+static int pnp_read_vmbus ( struct net_device *netdev __unused,
+			    struct pnp_nic *nic __unused ) {
+	return -ENODEV;
+}
+
+#endif /* PLATFORM_efi */
+
+/**
+ * Read what pnplist reports about a network device
+ *
+ * @v netdev		Network device
+ * @v nic		NIC report to fill in
+ * @ret rc		Return status code (-ENODEV if neither a PCI device nor
+ *			a Hyper-V VMBus adapter)
+ */
+static int pnp_read_nic ( struct net_device *netdev, struct pnp_nic *nic ) {
+	struct pci_device pci;
+	int rc;
+
+	memset ( nic, 0, sizeof ( *nic ) );
+	nic->netdev = netdev;
+
+	printf ( "\nDEBUG: ==== Processing device '%s' ====\n", netdev->name );
+
+	/* Get the underlying PCI device */
+	if ( ( rc = pnp_get_pci_device ( netdev, &pci ) ) != 0 ) {
+		/* Not a PCI device: it may be a Hyper-V VMBus adapter */
+		if ( pnp_read_vmbus ( netdev, nic ) == 0 ) {
+			printf ( "DEBUG: '%s' is Hyper-V VMBus channel %s\n",
+				 netdev->name, nic->vmbus_instance );
+			return 0;
+		}
+		printf ( "DEBUG: Could not identify PCI device for '%s', skipping\n" , netdev->name );
+		return rc;
+	}
+	nic->busdevfn = pci.busdevfn;
+
+	/* Read the hardware-ID fields */
+	rc = pnp_fill_hop ( &pci, &nic->id );
+	printf ( "DEBUG: Read subsystem IDs: subsys_vendor=0x%04x subsys_device=0x%04x\n",
+		 nic->id.subsys_vendor, nic->id.subsys_device );
+	printf ( "DEBUG: Read revision: rc=%d value=0x%02x\n", rc, nic->id.revision );
+
+	/* Read the instance ID, if the NIC has a serial number */
+	pnp_read_dsn ( &pci, nic );
+
+	printf ( "DEBUG: Final values - vendor=0x%04x device=0x%04x subsys_vendor=0x%04x subsys_device=0x%04x rev=0x%02x\n", nic->id.vendor, nic->id.device, nic->id.subsys_vendor, nic->id.subsys_device, nic->id.revision );
+
+	/* Read the bridge chain */
+	pnp_walk_chain ( &pci, nic );
+
+	return 0;
+}
+
+/**
+ * Print a device's PCI Express port type and slot flags
+ *
+ * @v hop		Hardware-ID fields
+ */
+static void pnp_print_pcie ( struct pnp_hop *hop ) {
+	static const char *types[] = {
+		"endpoint", "legacy endpoint", "type 2", "type 3", "root port",
+		"upstream port", "downstream port", "PCIe-to-PCI bridge",
+		"PCI-to-PCIe bridge", "integrated endpoint", "event collector",
+	};
+	unsigned int type = PNP_EXP_FLAGS_TYPE ( hop->pcie_flags );
+
+	if ( ! hop->pcie_flags ) {
+		printf ( " (not PCIe)" );
+		return;
+	}
+	printf ( " (%s", ( ( type < ( sizeof ( types ) / sizeof ( types[0] ) ) ) ?
+			   types[type] : "unknown type" ) );
+	if ( hop->pcie_flags & PNP_EXP_FLAGS_SLOT ) {
+		printf ( ", slot%s%s",
+			 ( ( hop->slot_cap & PNP_EXP_SLTCAP_HPC ) ?
+			   ", hot-plug" : "" ),
+			 ( ( hop->slot_cap & PNP_EXP_SLTCAP_HPS ) ?
+			   ", surprise" : "" ) );
+	}
+	printf ( ")" );
+}
+
+/**
+ * Print a NIC report to the console
+ *
+ * Windows only takes the instance ID from the device itself when the
+ * NIC has a PCIe Device Serial Number.  Otherwise it derives the ID
+ * from the NIC's location (see the bridge chain), which cannot be
+ * shown here.
+ *
+ * @v nic		NIC report
+ */
+static void pnp_print_nic ( struct pnp_nic *nic ) {
+	struct pnp_hop *hop;
+	unsigned int i;
+
+	if ( nic->vmbus ) {
+		printf ( "VMBUS\\{%s}\\{%s} (Hyper-V network adapter)\n",
+			 nic->vmbus_class, nic->vmbus_instance );
+		return;
+	}
+
+	printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X",
+		 nic->id.vendor, nic->id.device, nic->id.subsys_device,
+		 nic->id.subsys_vendor, nic->id.revision );
+	if ( nic->instance[0] ) {
+		printf ( "\\%s\n", nic->instance );
+	} else {
+		printf ( " at %02x:%02x.%x (no serial number, so the instance "
+			 "ID depends on the PCI location)\n",
+			 PCI_BUS ( nic->busdevfn ), PCI_SLOT ( nic->busdevfn ),
+			 PCI_FUNC ( nic->busdevfn ) );
+	}
+
+	printf ( "DEBUG: %s PCIe type:", nic->netdev->name );
+	pnp_print_pcie ( &nic->id );
+	printf ( "\n" );
+	printf ( "DEBUG: %s instance-id chain: complete=%d, %d bridge(s) "
+		 "root->parent (NIC excluded)\n", nic->netdev->name,
+		 nic->chain_complete, nic->nbridges );
+	for ( i = 0 ; i < nic->nbridges ; i++ ) {
+		hop = &nic->bridges[i];
+		printf ( "  bridge[%d] PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X devfn=%02X",
+			 i, hop->vendor, hop->device, hop->subsys_device,
+			 hop->subsys_vendor, hop->revision, hop->devfn );
+		pnp_print_pcie ( hop );
+		printf ( "\n" );
+	}
+}
+
+/**
+ * Format NIC reports as a URL-encoded query string
+ *
+ * Per NIC: netN_ven, _dev, _subsys_ven, _subsys_dev, _rev, _bus_loc,
+ * _dsn_present, _instance (the ready-to-use instance ID suffix when a
+ * DSN is present), _chain_complete, _pcie_flags, and per bridge K (0 =
+ * the bridge on the root bus) netN_chainK_ven, _dev, _subsys_ven,
+ * _subsys_dev, _rev, _devfn, _pcie_flags and _slot_cap.  The PCI Express
+ * Capabilities and Slot Capabilities registers are given raw (as 0x...).
+ *
+ * A Hyper-V VMBus adapter is given as netN_bus=vmbus, netN_vmbus_class
+ * and netN_vmbus_instance (GUIDs without braces) instead.
+ *
+ * As with ssnprintf(), call this with a NULL buffer and zero size to
+ * find the length needed, then again to fill in the buffer.
+ *
+ * @v buf		Buffer to fill in
+ * @v size		Size of buffer
+ * @v nics		NIC reports
+ * @v count		Number of NIC reports
+ * @ret len		Length of formatted string
+ */
+static size_t pnp_format_nics ( char *buf, size_t size,
+				struct pnp_nic *nics, unsigned int count ) {
+	struct pnp_nic *nic;
+	struct pnp_hop *hop;
+	const char *name;
+	size_t len = 0;
+	unsigned int i;
+	unsigned int j;
+
+	for ( i = 0 ; i < count ; i++ ) {
+		nic = &nics[i];
+		name = nic->netdev->name;
+		if ( nic->vmbus ) {
+			len += ssnprintf ( ( buf + len ), ( size - len ),
+					   "%s%s_bus=vmbus&%s_vmbus_class=%s"
+					   "&%s_vmbus_instance=%s",
+					   ( i ? "&" : "" ), name,
+					   name, nic->vmbus_class,
+					   name, nic->vmbus_instance );
+			continue;
+		}
+		len += ssnprintf ( ( buf + len ), ( size - len ),
+				   "%s%s_ven=0x%04x&%s_dev=0x%04x"
+				   "&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x"
+				   "&%s_rev=0x%02x&%s_bus_loc=%02x:%02x.%x"
+				   "&%s_dsn_present=%d&%s_instance=%s"
+				   "&%s_chain_complete=%d&%s_pcie_flags=0x%04x",
+				   ( i ? "&" : "" ),
+				   name, nic->id.vendor, name, nic->id.device,
+				   name, nic->id.subsys_vendor,
+				   name, nic->id.subsys_device,
+				   name, nic->id.revision,
+				   name, PCI_BUS ( nic->busdevfn ),
+				   PCI_SLOT ( nic->busdevfn ),
+				   PCI_FUNC ( nic->busdevfn ),
+				   name, ( nic->instance[0] != '\0' ),
+				   name, nic->instance,
+				   name, nic->chain_complete,
+				   name, nic->id.pcie_flags );
+		for ( j = 0 ; j < nic->nbridges ; j++ ) {
+			hop = &nic->bridges[j];
+			len += ssnprintf ( ( buf + len ), ( size - len ),
+					   "&%s_chain%d_ven=0x%04x"
+					   "&%s_chain%d_dev=0x%04x"
+					   "&%s_chain%d_subsys_ven=0x%04x"
+					   "&%s_chain%d_subsys_dev=0x%04x"
+					   "&%s_chain%d_rev=0x%02x"
+					   "&%s_chain%d_devfn=%02x"
+					   "&%s_chain%d_pcie_flags=0x%04x"
+					   "&%s_chain%d_slot_cap=0x%08x",
+					   name, j, hop->vendor,
+					   name, j, hop->device,
+					   name, j, hop->subsys_vendor,
+					   name, j, hop->subsys_device,
+					   name, j, hop->revision,
+					   name, j, hop->devfn,
+					   name, j, hop->pcie_flags,
+					   name, j, hop->slot_cap );
+		}
+	}
+	return len;
+}
+
+/**
+ * Store NIC reports in a setting
+ *
+ * @v name		Setting name
+ * @v nics		NIC reports
+ * @v count		Number of NIC reports
+ * @ret rc		Return status code
+ */
+static int pnp_store_nics ( char *name, struct pnp_nic *nics,
+			    unsigned int count ) {
+	struct named_setting setting;
+	size_t len;
+	char *output;
+	int rc;
+
+	/* Parse setting name */
+	if ( ( rc = parse_autovivified_setting ( name, &setting ) ) != 0 ) {
+		printf ( "Could not parse setting name \"%s\": %s\n",
+			 name, strerror ( rc ) );
+		goto err_parse;
+	}
+
+	/* Apply default type if necessary */
+	if ( ! setting.setting.type )
+		setting.setting.type = &setting_type_string;
+
+	/* Format the reports */
+	len = pnp_format_nics ( NULL, 0, nics, count );
+	output = malloc ( len + 1 /* NUL */ );
+	if ( ! output ) {
+		rc = -ENOMEM;
+		goto err_alloc;
+	}
+	pnp_format_nics ( output, ( len + 1 ), nics, count );
+
+	/* Store setting */
+	printf ( "\nDEBUG: Storing %d bytes to variable '%s'\n",
+		 ( ( int ) len ), name );
+	if ( ( rc = storef_setting ( setting.settings, &setting.setting,
+				     output ) ) != 0 ) {
+		printf ( "Could not store to variable \"%s\": %s\n",
+			 name, strerror ( rc ) );
+		goto err_store;
+	}
+
+ err_store:
+	free ( output );
+ err_alloc:
+ err_parse:
+	return rc;
+}
+
+/**
+ * "pnplist" command
+ *
+ * @v argc		Argument count
+ * @v argv		Argument list
+ * @ret rc		Return status code
+ */
+static int pnplist_exec ( int argc, char **argv ) {
+	struct pnplist_options opts;
+	struct net_device *netdev;
+	struct pnp_nic *nics;
+	unsigned int max = 0;
+	unsigned int count = 0;
+	int rc;
+
+	/* Parse options */
+	if ( ( rc = parse_options ( argc, argv, &pnplist_cmd, &opts ) ) != 0 )
+		goto err_parse;
+
+	/* Allocate a report for every network device */
+	for_each_netdev ( netdev )
+		max++;
+	nics = calloc ( ( max ? max : 1 ), sizeof ( nics[0] ) );
+	if ( ! nics ) {
+		rc = -ENOMEM;
+		goto err_alloc;
+	}
+
+	/* Read every PCI and VMBus network device, skipping all others */
+	for_each_netdev ( netdev ) {
+		if ( pnp_read_nic ( netdev, &nics[count] ) != 0 )
+			continue;
+		if ( ! opts.store )
+			pnp_print_nic ( &nics[count] );
+		count++;
+	}
+
+	/* Store the reports if requested */
+	if ( opts.store &&
+	     ( ( rc = pnp_store_nics ( opts.store, nics, count ) ) != 0 ) )
+		goto err_store;
+
+ err_store:
+	free ( nics );
+ err_alloc:
+ err_parse:
+	return rc;
+}
+
+/** PNP list command */
+COMMAND ( pnplist, pnplist_exec );
