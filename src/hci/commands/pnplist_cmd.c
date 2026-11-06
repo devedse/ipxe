@@ -35,6 +35,12 @@ FILE_SECBOOT ( PERMITTED );
 #include <ipxe/parseopt.h>
 #include <ipxe/settings.h>
 #include <ipxe/vsprintf.h>
+#ifdef PLATFORM_efi
+#include <ipxe/uuid.h>
+#include <ipxe/efi/efi.h>
+#include <ipxe/efi/efi_driver.h>
+#include <ipxe/efi/efi_path.h>
+#endif
 
 /** @file
  *
@@ -46,6 +52,11 @@ FILE_SECBOOT ( PERMITTED );
  * Device Serial Number (when the NIC has one), and otherwise the chain
  * of PCI bridges from the root bus to the NIC, from which the host
  * computes the location-based instance ID that Windows will use.
+ *
+ * A Hyper-V (generation 2) VM's network adapter is not a PCI device but
+ * a VMBus channel, driven through the firmware's SNP.  Windows names it
+ * VMBUS\{device class}\{channel instance}, and both GUIDs are in the
+ * firmware's device path for it, so those are listed instead.
  *
  * With --store, the result is stored as a URL-encoded query string
  * (net0_ven=0x8086&net0_dev=...).
@@ -96,10 +107,19 @@ struct pnp_hop {
 	uint32_t slot_cap;
 };
 
+/** Length of a GUID in text form, including the NUL */
+#define PNP_GUID_LEN 37
+
 /** What pnplist reports about one network device */
 struct pnp_nic {
 	/** Network device */
 	struct net_device *netdev;
+	/** The NIC is a Hyper-V VMBus channel rather than a PCI device */
+	int vmbus;
+	/** VMBus device class (f8615163-... for a network adapter) */
+	char vmbus_class[PNP_GUID_LEN];
+	/** VMBus channel instance: the instance ID Windows gives the NIC */
+	char vmbus_instance[PNP_GUID_LEN];
 	/** PCI bus:dev.fn address */
 	unsigned int busdevfn;
 	/** Hardware-ID fields */
@@ -360,12 +380,115 @@ static void pnp_walk_chain ( struct pci_device *pci, struct pnp_nic *nic ) {
 	nic->nbridges = count;
 }
 
+#ifdef PLATFORM_efi
+
+/** Vendor GUID of a Hyper-V VMBus channel node in a firmware device path */
+static EFI_GUID pnp_vmbus_path_guid = {
+	0x9b17e5a2, 0x0891, 0x42dd,
+	{ 0xb6, 0x53, 0x80, 0xb5, 0xc2, 0x28, 0x09, 0xba }
+};
+
+/** A Hyper-V VMBus channel node in a firmware device path
+ *
+ * Hyper-V's generation 2 firmware describes a VMBus device as
+ * AcpiEx(VMBus,0,0)/VenHw(9B17E5A2-0891-42DD-B653-80B5C22809BA,<data>),
+ * where the vendor data is the channel's device class (interface type)
+ * followed by its instance GUID.
+ */
+struct pnp_vmbus_path {
+	/** Vendor device path header */
+	VENDOR_DEVICE_PATH vendor;
+	/** Device class */
+	EFI_GUID type;
+	/** Channel instance */
+	EFI_GUID instance;
+} __attribute__ (( packed ));
+
+/**
+ * Format an EFI GUID as text, the way Windows writes it in instance IDs
+ *
+ * @v guid		EFI GUID
+ * @v buf		Buffer to fill in (PNP_GUID_LEN bytes)
+ */
+static void pnp_guid_text ( EFI_GUID *guid, char *buf ) {
+	union uuid uuid;
+
+	/* An EFI GUID stores its first three fields little-endian */
+	memcpy ( &uuid, guid, sizeof ( uuid ) );
+	uuid_mangle ( &uuid );
+	snprintf ( buf, PNP_GUID_LEN, "%s", uuid_ntoa ( &uuid ) );
+}
+
+/**
+ * Read a Hyper-V VMBus network adapter from its firmware device path
+ *
+ * @v netdev		Network device
+ * @v nic		NIC report to fill in
+ * @ret rc		Return status code (-ENODEV if not a VMBus device)
+ */
+static int pnp_read_vmbus ( struct net_device *netdev, struct pnp_nic *nic ) {
+	struct efi_device *efidev;
+	EFI_DEVICE_PATH_PROTOCOL *path;
+	struct pnp_vmbus_path *vmbus;
+	size_t len;
+
+	/* Only a NIC driven through the firmware has a device path */
+	if ( netdev->dev->desc.bus_type != BUS_TYPE_EFI )
+		return -ENODEV;
+	efidev = efidev_parent ( netdev->dev );
+	if ( ! efidev ) {
+		printf ( "DEBUG: No EFI device found for '%s'\n", netdev->name );
+		return -ENODEV;
+	}
+	printf ( "DEBUG: %s EFI device path: %s\n",
+		 netdev->name, efi_devpath_text ( efidev->path ) );
+
+	/* Look for the VMBus channel node */
+	for ( path = efidev->path ; path ; path = efi_path_next ( path ) ) {
+		if ( path->Type == END_DEVICE_PATH_TYPE )
+			break;
+		len = ( ( path->Length[1] << 8 ) | path->Length[0] );
+		if ( ( path->Type != HARDWARE_DEVICE_PATH ) ||
+		     ( path->SubType != HW_VENDOR_DP ) ||
+		     ( len < sizeof ( *vmbus ) ) )
+			continue;
+		vmbus = container_of ( path, struct pnp_vmbus_path,
+				       vendor.Header );
+		if ( memcmp ( &vmbus->vendor.Guid, &pnp_vmbus_path_guid,
+			      sizeof ( pnp_vmbus_path_guid ) ) != 0 )
+			continue;
+		pnp_guid_text ( &vmbus->type, nic->vmbus_class );
+		pnp_guid_text ( &vmbus->instance, nic->vmbus_instance );
+		nic->vmbus = 1;
+		return 0;
+	}
+
+	return -ENODEV;
+}
+
+#else /* PLATFORM_efi */
+
+/**
+ * Read a Hyper-V VMBus network adapter (only possible on EFI)
+ *
+ * @v netdev		Network device
+ * @v nic		NIC report to fill in
+ * @ret rc		Return status code
+ */
+static int pnp_read_vmbus ( struct net_device *netdev __unused,
+			    struct pnp_nic *nic __unused ) {
+	return -ENODEV;
+}
+
+#endif /* PLATFORM_efi */
+
 /**
  * Read what pnplist reports about a network device
  *
  * @v netdev		Network device
  * @v nic		NIC report to fill in
- * @ret rc		Return status code (-ENODEV if not a PCI device)
+ * @ret rc		Return status code (-ENODEV if neither a PCI device nor
+ *			a Hyper-V VMBus adapter)
  */
 static int pnp_read_nic ( struct net_device *netdev, struct pnp_nic *nic ) {
 	struct pci_device pci;
@@ -378,6 +501,12 @@ static int pnp_read_nic ( struct net_device *netdev, struct pnp_nic *nic ) {
 
 	/* Get the underlying PCI device */
 	if ( ( rc = pnp_get_pci_device ( netdev, &pci ) ) != 0 ) {
+		/* Not a PCI device: it may be a Hyper-V VMBus adapter */
+		if ( pnp_read_vmbus ( netdev, nic ) == 0 ) {
+			printf ( "DEBUG: '%s' is Hyper-V VMBus channel %s\n",
+				 netdev->name, nic->vmbus_instance );
+			return 0;
+		}
 		printf ( "DEBUG: Could not identify PCI device for '%s', skipping\n" , netdev->name );
 		return rc;
 	}
@@ -443,6 +572,12 @@ static void pnp_print_nic ( struct pnp_nic *nic ) {
 	struct pnp_hop *hop;
 	unsigned int i;
 
+	if ( nic->vmbus ) {
+		printf ( "VMBUS\\{%s}\\{%s} (Hyper-V network adapter)\n",
+			 nic->vmbus_class, nic->vmbus_instance );
+		return;
+	}
+
 	printf ( "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%04X%04X&REV_%02X",
 		 nic->id.vendor, nic->id.device, nic->id.subsys_device,
 		 nic->id.subsys_vendor, nic->id.revision );
@@ -481,6 +616,9 @@ static void pnp_print_nic ( struct pnp_nic *nic ) {
  * _subsys_dev, _rev, _devfn, _pcie_flags and _slot_cap.  The PCI Express
  * Capabilities and Slot Capabilities registers are given raw (as 0x...).
  *
+ * A Hyper-V VMBus adapter is given as netN_bus=vmbus, netN_vmbus_class
+ * and netN_vmbus_instance (GUIDs without braces) instead.
+ *
  * As with ssnprintf(), call this with a NULL buffer and zero size to
  * find the length needed, then again to fill in the buffer.
  *
@@ -502,6 +640,15 @@ static size_t pnp_format_nics ( char *buf, size_t size,
 	for ( i = 0 ; i < count ; i++ ) {
 		nic = &nics[i];
 		name = nic->netdev->name;
+		if ( nic->vmbus ) {
+			len += ssnprintf ( ( buf + len ), ( size - len ),
+					   "%s%s_bus=vmbus&%s_vmbus_class=%s"
+					   "&%s_vmbus_instance=%s",
+					   ( i ? "&" : "" ), name,
+					   name, nic->vmbus_class,
+					   name, nic->vmbus_instance );
+			continue;
+		}
 		len += ssnprintf ( ( buf + len ), ( size - len ),
 				   "%s%s_ven=0x%04x&%s_dev=0x%04x"
 				   "&%s_subsys_ven=0x%04x&%s_subsys_dev=0x%04x"
@@ -624,7 +771,7 @@ static int pnplist_exec ( int argc, char **argv ) {
 		goto err_alloc;
 	}
 
-	/* Read every PCI network device, skipping all others */
+	/* Read every PCI and VMBus network device, skipping all others */
 	for_each_netdev ( netdev ) {
 		if ( pnp_read_nic ( netdev, &nics[count] ) != 0 )
 			continue;
